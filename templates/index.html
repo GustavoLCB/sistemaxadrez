@@ -369,9 +369,13 @@ async function renderRodadas(){
       ${limitReached ? `<p class="desc" style="color:var(--gold-soft, #e4c584);">Este grupo atingiu o limite de rodadas configurado — ajuste em Grupos se quiser liberar mais.</p>` : ''}
     `;
     body += rounds.length===0 ? '<div class="empty">Nenhuma rodada ainda.</div>' :
-      rounds.slice().reverse().map(rnd=>{
+      rounds.slice().reverse().map((rnd,i)=>{
         const roundNumber = rnd[0]?.roundNumber;
-        return `<div style="margin-top:10px;"><b>Rodada ${roundNumber}</b>` + rnd.map(m=>{
+        const isLast = i===0;
+        return `<div style="margin-top:10px;"><div style="display:flex; justify-content:space-between; align-items:center;">
+            <b>Rodada ${roundNumber}</b>
+            ${isLast ? `<button class="btn danger" style="font-size:11.5px; padding:4px 10px;" onclick="undoLastRound()">Desfazer esta rodada</button>` : ''}
+          </div>` + rnd.map(m=>{
           if(m.isBye){ const a = cache.athletes.find(x=>x.id===m.byeAthleteId); return `<div class="match-row"><div>${a?a.full_name:'—'} (BYE)</div><div></div><div></div></div>`; }
           const w = cache.athletes.find(x=>x.id===m.whiteId), b = cache.athletes.find(x=>x.id===m.blackId);
           return `<div class="match-row">
@@ -390,6 +394,10 @@ async function renderRodadas(){
 async function genRound(){
   const forcedByeAthleteId = document.getElementById('rd-forced-bye')?.value || null;
   try{ await api('/api/groups/'+ui.roundsGroup+'/generate-round', {method:'POST', body:JSON.stringify({forcedByeAthleteId})}); render(); }catch(e){}
+}
+async function undoLastRound(){
+  if(!confirm('Desfazer a última rodada deste grupo? Se algum resultado já tiver sido lançado, o rating volta ao valor de antes. Essa ação não pode ser desfeita.')) return;
+  try{ const r = await api('/api/groups/'+ui.roundsGroup+'/rounds/last', {method:'DELETE'}); toast(`Rodada ${r.removedRoundNumber} desfeita.`); render(); }catch(e){}
 }
 async function recordResult(mid, outcome){ try{ await api('/api/matches/'+mid+'/result', {method:'POST', body:JSON.stringify({outcome})}); render(); }catch(e){} }
 
@@ -430,7 +438,12 @@ function renderFiscais(){
     <h2>Fiscais cadastrados (${cache.users.filter(u=>u.role==='fiscal').length})</h2>
     ${cache.users.filter(u=>u.role==='fiscal').length? `<table><thead><tr><th>Nome</th><th>Usuário</th><th>Grupos</th><th></th></tr></thead><tbody>
       ${cache.users.filter(u=>u.role==='fiscal').map(u=>{
-        const groupNames = u.groupIds.map(gid=>{const g=cache.groups.find(x=>x.id===gid); return g?g.name:'?';}).join(', ') || '— nenhum —';
+        const groupNames = u.groupIds.map(gid=>{
+          const g=cache.groups.find(x=>x.id===gid);
+          if(!g) return '?';
+          const cat=catById(g.category_id);
+          return `${g.category_name||(cat?cat.name:'')} · ${g.gender} · ${g.name}`;
+        }).join('; ') || '— nenhum —';
         return `<tr><td>${u.full_name||'—'}</td><td>${u.username}</td><td>${groupNames}</td>
           <td><button class="btn danger" onclick="delUser('${u.id}')">Remover</button></td></tr>`;
       }).join('')}
@@ -467,7 +480,8 @@ async function renderQuadroPublico(){
         <div class="public-row" style="display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--border); flex-wrap:wrap;">
           <div>
             <b>${l.categoryName} · ${l.gender==='M'?'Masculino':'Feminino'} · ${l.name}</b><br>
-            <a href="${l.url}" target="_blank" style="color:var(--ice-soft, #6fa8dc); font-size:12.5px;">${l.url}</a>
+            <a href="${l.url}" style="color:var(--ice-soft, #6fa8dc); font-size:12.5px;">${l.url}</a>
+            <div class="desc" style="margin-top:2px;">Abre na mesma aba — assim o botão "← Voltar" do quadro público funciona certinho.</div>
           </div>
           <div style="background:#f3f0e8; padding:8px; border-radius:8px;">
             <img src="${l.qrUrl}" width="120" height="120" style="display:block;">

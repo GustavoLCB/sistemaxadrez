@@ -58,12 +58,17 @@
   <span class="floating-piece p9">♟</span>
 
 <div class="app">
-  <button class="btn secondary" onclick="history.back()" style="margin-bottom:14px;">← Voltar</button>
+  <button class="btn secondary" id="back-btn" onclick="history.back()" style="margin-bottom:14px;">← Voltar</button>
   <h1>Quadro Público</h1>
   <div id="content"></div>
   <p style="text-align:center; color:var(--text-muted); font-size:12px;">Atualiza automaticamente a cada 15s</p>
 </div>
 <script>
+// Se a página foi aberta direto (ex: QR Code escaneado), não existe "página anterior" de
+// verdade — nesse caso, o botão só atrapalharia, então escondemos.
+if(!document.referrer || !document.referrer.includes(window.location.host)){
+  document.getElementById('back-btn').style.display = 'none';
+}
 const groupId = "{{ group_id }}";
 async function paint(){
   const standings = await fetch('/api/public/groups/'+groupId+'/standings').then(r=>r.json());

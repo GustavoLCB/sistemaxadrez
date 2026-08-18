@@ -681,6 +681,31 @@ def generate_round(gid):
         return jsonify({"ok": True, "roundNumber": round_number})
 
 
+@app.route("/api/groups/<gid>/rounds/last", methods=["DELETE"])
+@login_required
+@admin_required
+def delete_last_round(gid):
+    """Desfaz a rodada mais recente de um grupo — útil quando ela foi gerada por engano
+    (BYE errado, grupo errado, etc). Só permite apagar a ÚLTIMA rodada (não dá pra apagar
+    uma do meio, pois quebraria a numeração e o histórico de adversários). Se algum
+    resultado já tinha sido lançado nessa rodada, o rating é revertido antes de apagar."""
+    with write_transaction() as conn:
+        rounds = conn.execute(
+            "SELECT * FROM rounds WHERE group_id=? ORDER BY round_number DESC LIMIT 1", (gid,)
+        ).fetchall()
+        if not rounds:
+            return jsonify({"error": "Este grupo não tem nenhuma rodada para desfazer"}), 400
+        last_round = rounds[0]
+        matches = conn.execute("SELECT * FROM matches WHERE round_id=?", (last_round["id"],)).fetchall()
+        for m in matches:
+            if not m["is_bye"] and m["applied"]:
+                conn.execute("UPDATE athletes SET rating = rating - ? WHERE id=?", (m["delta_white"], m["white_id"]))
+                conn.execute("UPDATE athletes SET rating = rating - ? WHERE id=?", (m["delta_black"], m["black_id"]))
+        conn.execute("DELETE FROM matches WHERE round_id=?", (last_round["id"],))
+        conn.execute("DELETE FROM rounds WHERE id=?", (last_round["id"],))
+        return jsonify({"ok": True, "removedRoundNumber": last_round["round_number"]})
+
+
 @app.route("/api/matches/<mid>/result", methods=["POST"])
 @login_required
 def record_result(mid):
