@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Portal do Torneio</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  body{
+    display:flex; align-items:center; justify-content:center; min-height:100vh;
+    overflow:hidden; position:relative;
+  }
+  /* tabuleiro translúcido de fundo, cobrindo a tela inteira */
+  body::before{
+    content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image: repeating-conic-gradient(rgba(147,180,224,0.05) 0% 25%, transparent 0% 50%);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, black 40%, transparent 85%);
+    -webkit-mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, black 40%, transparent 85%);
+  }
+  /* peças de xadrez flutuando suavemente pela tela */
+  .floating-piece{
+    position:fixed; z-index:0; pointer-events:none; color:rgba(201,160,78,0.14);
+    font-size:90px; line-height:1; user-select:none;
+    animation: drift 22s ease-in-out infinite;
+  }
+  .floating-piece.ice{ color:rgba(111,168,220,0.14); }
+  .floating-piece.p1{ top:8%;  left:6%;  font-size:120px; animation-duration:26s; }
+  .floating-piece.p2{ top:62%; left:10%; font-size:80px;  animation-duration:19s; animation-delay:-4s; }
+  .floating-piece.p3{ top:15%; left:82%; font-size:100px; animation-duration:24s; animation-delay:-9s; }
+  .floating-piece.p4{ top:70%; left:80%; font-size:70px;  animation-duration:17s; animation-delay:-2s; }
+  .floating-piece.p5{ top:40%; left:46%; font-size:60px;  animation-duration:21s; animation-delay:-12s; opacity:0.7; }
+  @keyframes drift{
+    0%   { transform: translate(0,0) rotate(0deg); }
+    25%  { transform: translate(22px,-18px) rotate(4deg); }
+    50%  { transform: translate(-14px,14px) rotate(-3deg); }
+    75%  { transform: translate(18px,10px) rotate(2deg); }
+    100% { transform: translate(0,0) rotate(0deg); }
+  }
+  .login-box{position:relative; z-index:2; width:100%; max-width:360px;}
+  .login-box h1{text-align:center; margin-bottom:4px;}
+  .login-box .sub{text-align:center; color:var(--text-muted); font-size:13px; margin-bottom:20px;}
+  .error{color:var(--loss); font-size:13px; margin-top:8px; text-align:center; min-height:18px;}
+  .panel{backdrop-filter: blur(6px);}
+</style>
+</head>
+<body>
+  <span class="floating-piece p1">♞</span>
+  <span class="floating-piece ice p2">♟</span>
+  <span class="floating-piece p3">♜</span>
+  <span class="floating-piece ice p4">♝</span>
+  <span class="floating-piece p5">♛</span>
+
+  <div class="login-box">
+    <h1>Portal do Torneio</h1>
+    <div class="sub">Xadrez Escolar</div>
+    <div class="panel">
+      <label>Usuário</label>
+      <input id="username" autocomplete="username">
+      <div style="height:10px;"></div>
+      <label>Senha</label>
+      <input id="password" type="password" autocomplete="current-password">
+      <div style="margin-top:16px;"><button class="btn" style="width:100%;" onclick="doLogin()">Entrar</button></div>
+      <div class="error" id="err"></div>
+    </div>
+  </div>
+<script>
+document.getElementById('password').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+async function doLogin(){
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const errEl = document.getElementById('err');
+  errEl.textContent = '';
+  try{
+    const res = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})});
+    const data = await res.json();
+    if(!res.ok){ errEl.textContent = data.error || 'Erro ao entrar'; return; }
+    window.location.href = '/';
+  }catch(e){ errEl.textContent = 'Erro de conexão'; }
+}
+</script>
+</body>
+</html>

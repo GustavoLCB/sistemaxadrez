@@ -8,7 +8,10 @@
 </head>
 <body>
 <div class="app">
-  <h1>Portal do Torneio — Xadrez Escolar <span style="font-size:13px; color:var(--text-muted);">(versão Flask/SQLite)</span></h1>
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+    <h1>Portal do Torneio — Xadrez Escolar <span style="font-size:13px; color:var(--text-muted);">(versão Flask/SQLite)</span></h1>
+    <button class="btn secondary" onclick="doLogout()">Sair</button>
+  </div>
   <nav id="tabs"></nav>
   <div id="content"></div>
 </div>
@@ -20,9 +23,10 @@ const TABS = [
   {id:'atletas', label:'Atletas'},
   {id:'rodadas', label:'Rodadas'},
   {id:'classificacao', label:'Classificação'},
+  {id:'fiscais', label:'Fiscais'},
 ];
 let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0 };
-let cache = { categories:[], groups:[], athletes:[], rules:[] };
+let cache = { categories:[], groups:[], athletes:[], rules:[], users:[] };
 
 function toast(msg){
   const t = document.getElementById('toast');
@@ -31,15 +35,18 @@ function toast(msg){
 }
 async function api(path, opts){
   const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts));
+  if(res.status === 401){ window.location.href = '/login'; throw new Error('não autenticado'); }
   const data = await res.json().catch(()=>({}));
   if(!res.ok){ toast(data.error || 'Erro'); throw new Error(data.error||'erro'); }
   return data;
 }
+async function doLogout(){ await api('/api/logout', {method:'POST'}); window.location.href = '/login'; }
 async function refreshCache(){
   cache.categories = await api('/api/categories');
   cache.groups = await api('/api/groups');
   cache.athletes = await api('/api/athletes');
   cache.rules = await api('/api/category-rules');
+  cache.users = await api('/api/users');
 }
 function catById(id){ return cache.categories.find(c=>c.id===id); }
 function groupsOf(catId, gender){ return cache.groups.filter(g=>g.category_id===catId && g.gender===gender); }
@@ -59,6 +66,7 @@ async function render(){
   else if(ui.tab==='atletas') c.innerHTML = renderAtletas();
   else if(ui.tab==='rodadas') c.innerHTML = await renderRodadas();
   else if(ui.tab==='classificacao') c.innerHTML = await renderClassificacao();
+  else if(ui.tab==='fiscais') c.innerHTML = renderFiscais();
 }
 
 function renderCategorias(){
@@ -147,15 +155,20 @@ function renderAtletas(){
       <div><label>Categoria</label><select id="af-cat">${cache.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
       <div><label>Faixa (K)</label><select id="af-k"><option value="iniciante">Iniciante</option><option value="regular">Regular</option><option value="mestre">Mestre</option></select></div>
     </div>
+    <div class="grid cols-4" style="margin-top:10px;">
+      <div><label>CPF (opcional, mas recomendado)</label><input id="af-cpf" placeholder="000.000.000-00"></div>
+    </div>
+    <p class="desc" style="margin-top:6px;">O CPF, quando informado, funciona como identificador único do atleta — evita duplicar a mesma pessoa em importações futuras e permite acompanhá-la com segurança em outros torneios ao longo do ano, mesmo que o nome seja digitado de forma um pouco diferente.</p>
     <div style="margin-top:10px;"><button class="btn" onclick="addAthlete()">Adicionar</button></div>
   </div>
 
   <div class="panel">
     <h2>Importação em massa (Excel / CSV)</h2>
-    <p class="desc">Planilha com colunas Nome, Idade, Colégio (e opcionalmente Gênero). A categoria de cada atleta é
+    <p class="desc">Planilha com colunas Nome, Idade, Colégio (e opcionalmente Gênero, CPF). A categoria de cada atleta é
     definida automaticamente pela idade, usando as faixas cadastradas na aba Categorias — cadastre-as antes de importar.
     Se um grupo ainda não existir para a combinação categoria+gênero, ele é criado sozinho, dividindo os atletas em
-    grupos do tamanho que você definir abaixo.</p>
+    grupos do tamanho que você definir abaixo. Quando a planilha tem CPF, ele é usado para não duplicar o mesmo atleta
+    em importações repetidas — mais confiável do que comparar só pelo nome.</p>
     <div class="grid cols-4">
       <div><label>Gênero padrão (se a planilha não tiver essa coluna)</label><select id="imp-gender"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
       <div><label>Faixa padrão (K)</label><select id="imp-k"><option value="iniciante">Iniciante</option><option value="regular">Regular</option><option value="mestre">Mestre</option></select></div>
@@ -172,22 +185,45 @@ function renderAtletas(){
       <input id="athlete-search" placeholder="Buscar por nome ou colégio…" style="max-width:260px;" oninput="ui.athleteSearch=this.value; renderAthletesTableOnly();">
     </div>
     <div id="athletes-table-wrap">${renderAthletesTable()}</div>
+  </div>
+
+  <div class="panel" style="border:1px solid var(--loss);">
+    <h2 style="color:var(--loss);">Zona de Perigo</h2>
+    <p class="desc">Use isto se importou um arquivo errado e precisa recomeçar. Todas as ações abaixo pedem que você
+    digite <b>APAGAR</b> para confirmar, e não podem ser desfeitas.</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn danger" onclick="dangerAction('delete-all-athletes','Remover TODOS os atletas (grupos e categorias continuam existindo, vazios)')">Remover todos os atletas</button>
+      <button class="btn danger" onclick="dangerAction('delete-all-groups','Remover TODOS os grupos (os atletas continuam existindo, sem grupo)')">Remover todos os grupos</button>
+      <button class="btn danger" onclick="dangerAction('delete-everything','Reiniciar TUDO: atletas, grupos, categorias e faixas de idade (os logins de fiscais continuam existindo)')">Reiniciar tudo</button>
+    </div>
   </div>`;
+}
+async function dangerAction(endpoint, description){
+  const msg = `Isto vai: ${description}.\n\nEssa ação NÃO PODE ser desfeita.\n\nPara confirmar, digite exatamente: APAGAR`;
+  const typed = prompt(msg);
+  if(typed === null) return;
+  if(typed !== 'APAGAR'){ toast('Confirmação incorreta — nada foi removido.'); return; }
+  try{
+    const r = await api('/api/danger/'+endpoint, {method:'POST', body: JSON.stringify({confirm:'APAGAR'})});
+    toast('Feito.');
+    render();
+  }catch(e){}
 }
 function renderAthletesTable(){
   const q = (ui.athleteSearch||'').trim().toLowerCase();
   const filtered = cache.athletes.filter(a=>{
     if(!q) return true;
-    return a.full_name.toLowerCase().includes(q) || (a.school||'').toLowerCase().includes(q);
+    return a.full_name.toLowerCase().includes(q) || (a.school||'').toLowerCase().includes(q) || (a.cpf||'').includes(q.replace(/\D/g,''));
   });
   const page = ui.athletePage||0;
   const pageSize = 100;
   const pageItems = filtered.slice(page*pageSize, (page+1)*pageSize);
   const totalPages = Math.max(1, Math.ceil(filtered.length/pageSize));
+  const formatCpf = (c)=> c ? c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : '—';
   const rows = pageItems.map(a=>{
     const cat=catById(a.category_id);
     const grpOpts = groupsOf(a.category_id, a.gender).map(g=>`<option value="${g.id}" ${a.group_id===g.id?'selected':''}>${g.name}</option>`).join('');
-    return `<tr><td>${a.full_name}</td><td>${a.gender}</td><td>${a.age??'—'}</td><td>${a.school||'—'}</td><td>${cat?cat.name:'—'}</td><td>${a.rating}</td>
+    return `<tr><td>${a.full_name}</td><td>${a.gender}</td><td>${a.age??'—'}</td><td>${a.school||'—'}</td><td style="font-family:monospace; font-size:12px;">${formatCpf(a.cpf)}</td><td>${cat?cat.name:'—'}</td><td>${a.rating}</td>
       <td><select onchange="assignGroup('${a.id}', this.value)"><option value="">Sem grupo</option>${grpOpts}</select></td>
       <td><button class="btn danger" onclick="delAthlete('${a.id}')">Remover</button></td></tr>`;
   }).join('');
@@ -197,7 +233,7 @@ function renderAthletesTable(){
     <button class="btn secondary" ${page>=totalPages-1?'disabled':''} onclick="changeAthletePage(1)">Próxima →</button></span>
   </div>`;
   return filtered.length===0 ? '<div class="empty">Nenhum atleta encontrado.</div>' :
-    `<table><thead><tr><th>Nome</th><th>Gên.</th><th>Idade</th><th>Colégio</th><th>Categoria</th><th>Rating</th><th>Grupo</th><th></th></tr></thead><tbody>${rows}</tbody></table>${pager}`;
+    `<table><thead><tr><th>Nome</th><th>Gên.</th><th>Idade</th><th>Colégio</th><th>CPF</th><th>Categoria</th><th>Rating</th><th>Grupo</th><th></th></tr></thead><tbody>${rows}</tbody></table>${pager}`;
 }
 function renderAthletesTableOnly(){
   ui.athletePage = 0;
@@ -241,6 +277,7 @@ function handleImportFile(input){
       const ageIdx = findCol(headers, ['idade','anos']);
       const schoolIdx = findCol(headers, ['colegio','escola','instituicao']);
       const genderIdx = findCol(headers, ['genero','sexo']);
+      const cpfIdx = findCol(headers, ['cpf']);
       if(nameIdx===-1){ statusEl.textContent='Não encontrei coluna de nome.'; return; }
       const rows = [];
       for(let i=1;i<rowsRaw.length;i++){
@@ -255,14 +292,15 @@ function handleImportFile(input){
         rows.push({
           fullName, gender,
           age: ageIdx!==-1 && r[ageIdx]!=='' ? Number(r[ageIdx]) : null,
-          school: schoolIdx!==-1 ? String(r[schoolIdx]||'').trim() : ''
+          school: schoolIdx!==-1 ? String(r[schoolIdx]||'').trim() : '',
+          cpf: cpfIdx!==-1 ? String(r[cpfIdx]||'').trim() : ''
         });
       }
       statusEl.textContent = `Enviando ${rows.length} atleta(s)…`;
       const result = await api('/api/athletes/import', {method:'POST', body: JSON.stringify({
         rows, defaultGender, kFlag, rating, groupSize
       })});
-      statusEl.textContent = `Concluído: ${result.added} atleta(s) importado(s), ${result.groupsCreated} grupo(s) criado(s) automaticamente${result.skipped?`, ${result.skipped} duplicado(s) ignorado(s)`:''}${result.unmatched?`, ${result.unmatched} sem idade correspondente a nenhuma faixa (caíram em "Sem categoria")`:''}.`;
+      statusEl.textContent = `Concluído: ${result.added} atleta(s) importado(s), ${result.groupsCreated} grupo(s) criado(s) automaticamente${result.skipped?`, ${result.skipped} duplicado(s) ignorado(s)`:''}${result.unmatched?`, ${result.unmatched} sem idade correspondente a nenhuma faixa (caíram em "Sem categoria")`:''}${result.invalidCpf?`, ${result.invalidCpf} CPF(s) inválido(s) ignorado(s) (atleta foi importado mesmo assim, só sem o CPF)`:''}.`;
       render();
     }catch(err){
       console.error(err);
@@ -276,7 +314,12 @@ async function addAthlete(){
   const gender = document.getElementById('af-gender').value;
   const categoryId = document.getElementById('af-cat').value;
   const kFlag = document.getElementById('af-k').value;
-  try{ await api('/api/athletes', {method:'POST', body:JSON.stringify({fullName,gender,categoryId,kFlag,rating:1500})}); render(); }catch(e){}
+  const cpf = document.getElementById('af-cpf').value;
+  try{
+    await api('/api/athletes', {method:'POST', body:JSON.stringify({fullName,gender,categoryId,kFlag,rating:1500,cpf})});
+    document.getElementById('af-cpf').value='';
+    render();
+  }catch(e){}
 }
 async function assignGroup(id, groupId){ try{ await api('/api/athletes/'+id, {method:'PATCH', body:JSON.stringify({groupId: groupId||null})}); render(); }catch(e){} }
 async function delAthlete(id){ try{ await api('/api/athletes/'+id, {method:'DELETE'}); render(); }catch(e){} }
@@ -322,6 +365,52 @@ async function renderClassificacao(){
     </tbody></table>`;
   }
   return `<div class="panel"><h2>Classificação</h2><select onchange="ui.standGroup=this.value; render();">${options}</select><div style="margin-top:14px;">${body}</div></div>`;
+}
+
+function renderFiscais(){
+  return `
+  <div class="panel">
+    <h2>Novo fiscal</h2>
+    <p class="desc">Crie um usuário e senha para cada fiscal, e vincule ao(s) grupo(s) que ele vai controlar no dia do torneio. O fiscal só verá e só poderá lançar resultados desse(s) grupo(s).</p>
+    <div class="grid cols-4">
+      <div><label>Nome completo</label><input id="uf-name" placeholder="Ex: Maria Silva"></div>
+      <div><label>Usuário (login)</label><input id="uf-username" placeholder="ex: maria.silva"></div>
+      <div><label>Senha</label><input id="uf-password" type="password" placeholder="mín. 4 caracteres"></div>
+      <div style="display:flex; align-items:flex-end;"><button class="btn" style="width:100%;" onclick="addUser()">Criar fiscal</button></div>
+    </div>
+    <div style="margin-top:10px;">
+      <label>Grupo(s) que este fiscal vai controlar</label>
+      <select id="uf-groups" multiple style="height:120px;">
+        ${cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}">${cat?cat.name:''} · ${g.gender} · ${g.name}</option>`;}).join('')}
+      </select>
+      <p class="desc" style="margin-top:4px;">Segure Ctrl (ou Cmd no Mac) para selecionar mais de um grupo.</p>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Fiscais cadastrados (${cache.users.filter(u=>u.role==='fiscal').length})</h2>
+    ${cache.users.filter(u=>u.role==='fiscal').length? `<table><thead><tr><th>Nome</th><th>Usuário</th><th>Grupos</th><th></th></tr></thead><tbody>
+      ${cache.users.filter(u=>u.role==='fiscal').map(u=>{
+        const groupNames = u.groupIds.map(gid=>{const g=cache.groups.find(x=>x.id===gid); return g?g.name:'?';}).join(', ') || '— nenhum —';
+        return `<tr><td>${u.full_name||'—'}</td><td>${u.username}</td><td>${groupNames}</td>
+          <td><button class="btn danger" onclick="delUser('${u.id}')">Remover</button></td></tr>`;
+      }).join('')}
+    </tbody></table>` : '<div class="empty">Nenhum fiscal cadastrado ainda.</div>'}
+  </div>`;
+}
+async function addUser(){
+  const fullName = document.getElementById('uf-name').value;
+  const username = document.getElementById('uf-username').value;
+  const password = document.getElementById('uf-password').value;
+  const groupIds = Array.from(document.getElementById('uf-groups').selectedOptions).map(o=>o.value);
+  try{
+    await api('/api/users', {method:'POST', body: JSON.stringify({fullName, username, password, role:'fiscal', groupIds})});
+    toast('Fiscal criado.');
+    render();
+  }catch(e){}
+}
+async function delUser(id){
+  if(!confirm('Remover este fiscal? Ele perde o acesso imediatamente.')) return;
+  try{ await api('/api/users/'+id, {method:'DELETE'}); render(); }catch(e){}
 }
 
 render();

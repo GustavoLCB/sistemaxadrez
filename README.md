@@ -8,20 +8,33 @@ público confiável para pais e responsáveis.
 
 - Fluxo completo: categoria por idade → grupo → rodada → resultado → classificação.
 - Bloqueio de faixas de idade sobrepostas (o mesmo bug que corrigimos na versão anterior).
-- **Teste de concorrência real**: 15 "fiscais" gravando resultados de partidas diferentes
-  no mesmo instante — nenhuma gravação foi perdida ou sobrescrita. Isso não era garantido
-  na versão em HTML/Claude; aqui é, porque cada gravação é uma transação de banco de
-  dados isolada (`BEGIN IMMEDIATE` no SQLite), não mais "salvar o torneio inteiro por cima".
-- Importação em lote com categorização automática por idade.
+- Importação em massa de Excel com categorização automática por idade — testado com a
+  planilha real de 800 atletas: importou em menos de 1 segundo, distribuiu em 37 grupos
+  automaticamente, dentro do tamanho-alvo configurado.
+- **Login com usuário e senha, por fiscal, restrito ao(s) grupo(s) dele.** Um fiscal não
+  vê nem consegue mexer em nenhum grupo que não seja o seu (testado — tentativa de acesso
+  cruzado retorna erro 403). Ações administrativas (criar categoria, atleta, etc.) ficam
+  bloqueadas para fiscais.
+- **Teste de estresse com 50 fiscais**: 50 contas logadas simultaneamente, cada uma no seu
+  próprio grupo, gravando resultado de partida no exato mesmo instante — nenhuma gravação
+  foi perdida ou sobrescrita.
+- O quadro público (usado pelo QR Code, sem login) continua acessível normalmente.
+- **CPF como identificador opcional do atleta**, com validação dos dígitos verificadores
+  (não só o tamanho). Quando presente, é usado para não duplicar o mesmo atleta em
+  importações futuras, mesmo que o nome seja digitado de forma diferente.
+- **Zona de Perigo** (aba Atletas): três ações para desfazer uma importação errada —
+  remover todos os atletas, remover todos os grupos, ou reiniciar tudo — cada uma exigindo
+  que você digite "APAGAR" para confirmar.
+- **Migração automática do banco**: se você já tem o site rodando com dados reais, essa
+  atualização adiciona a coluna de CPF sozinha, sem apagar nada do que já existe (testado
+  simulando exatamente esse cenário antes de te entregar).
 
-## O que esta primeira versão NÃO tem ainda (portamos depois, como fizemos com o HTML)
+## O que ainda falta portar (portamos depois, como fizemos com o HTML)
 
-- Login por fiscal / permissões restritas por grupo.
-- QR Code gerado na tela (por enquanto, o link público é só `/publico/<id-do-grupo>` — dá
-  para gerar o QR Code de qualquer link colando-o em geradores gratuitos como o do
-  `qr-code-generator.com`, mas ainda não está automatizado dentro do site).
+- Visual completo (tema azul, tabuleiro de fundo, logo).
+- QR Code gerado automaticamente na tela (por enquanto, gere manualmente colando o link
+  `/publico/<id-do-grupo>` num gerador gratuito como o `qr-code-generator.com`).
 - Histórico entre torneios (arquivar e comparar torneios de datas diferentes).
-- Cores/logo/tabuleiro de fundo (o visual está mais simples, sem o tema completo).
 
 Nada disso é difícil de trazer — é só trabalho de continuar, exatamente como fomos
 adicionando recurso por recurso na versão anterior.
@@ -91,6 +104,25 @@ from app import app as application
 - Para o quadro público de um grupo específico, acesse:
   `seu-usuario.pythonanywhere.com/publico/<ID-DO-GRUPO>` (o ID aparece na tabela de
   Grupos, dentro do painel administrativo).
+
+## Passo 6 — Criar o administrador e os fiscais
+
+O site não vem com nenhum usuário criado. Antes de acessar, crie o administrador
+direto pelo console Bash do PythonAnywhere (ou localmente, no seu computador):
+
+```bash
+cd sistemaxadrez
+python3 create_admin.py
+```
+
+Vai pedir usuário, nome completo e senha (a senha não aparece na tela enquanto você
+digita — é normal, ela está sendo lida mesmo assim). Depois disso, acesse
+`seu-usuario.pythonanywhere.com` e faça login com esses dados.
+
+**Para criar os fiscais**, já logado como administrador, vá na aba **Fiscais** dentro
+do próprio site: crie um usuário e senha para cada um, e marque a qual grupo (ou
+grupos) cada fiscal deve ter acesso. O fiscal, ao logar, só vai ver e conseguir
+lançar resultados do grupo que você atribuiu a ele — nada mais.
 
 ## Quando algo mudar no código
 

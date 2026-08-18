@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS athletes (
     k_flag TEXT NOT NULL DEFAULT 'iniciante',
     rating INTEGER NOT NULL DEFAULT 1500,
     age INTEGER,
-    school TEXT
+    school TEXT,
+    cpf TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -85,6 +86,22 @@ CREATE INDEX IF NOT EXISTS idx_athletes_group ON athletes(group_id);
 CREATE INDEX IF NOT EXISTS idx_matches_round ON matches(round_id);
 CREATE INDEX IF NOT EXISTS idx_matches_group ON matches(group_id);
 CREATE INDEX IF NOT EXISTS idx_rounds_group ON rounds(group_id);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    full_name TEXT,
+    role TEXT NOT NULL CHECK(role IN ('admin','fiscal'))
+);
+
+CREATE TABLE IF NOT EXISTS user_groups (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    group_id TEXT NOT NULL REFERENCES groups_t(id),
+    PRIMARY KEY(user_id, group_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_groups_user ON user_groups(user_id);
 """
 
 def get_conn():
@@ -96,8 +113,20 @@ def get_conn():
 def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     conn.close()
+
+def _migrate(conn):
+    """Ajustes em bancos já existentes (ex: o que já está rodando no PythonAnywhere),
+    sem apagar nenhum dado. Roda toda vez que o app inicia; é seguro rodar de novo."""
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(athletes)").fetchall()]
+    if "cpf" not in cols:
+        conn.execute("ALTER TABLE athletes ADD COLUMN cpf TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_athletes_cpf ON athletes(cpf) "
+        "WHERE cpf IS NOT NULL AND cpf != ''"
+    )
 
 @contextmanager
 def write_transaction():

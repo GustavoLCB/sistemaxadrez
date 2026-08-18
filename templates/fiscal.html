@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Área do Fiscal — Portal do Torneio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+    <h1>Área do Fiscal <span id="who" style="font-size:13px; color:var(--text-muted);"></span></h1>
+    <button class="btn secondary" onclick="doLogout()">Sair</button>
+  </div>
+  <div id="content"></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+let me = null;
+let currentGroup = null;
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2200);
+}
+async function api(path, opts){
+  const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts));
+  if(res.status === 401){ window.location.href = '/login'; throw new Error('não autenticado'); }
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok){ toast(data.error || 'Erro'); throw new Error(data.error||'erro'); }
+  return data;
+}
+async function doLogout(){ await api('/api/logout', {method:'POST'}); window.location.href = '/login'; }
+
+async function init(){
+  me = await api('/api/me');
+  document.getElementById('who').textContent = me.fullName ? '— ' + me.fullName : '';
+  if(!me.groups.length){
+    document.getElementById('content').innerHTML = '<div class="panel"><div class="empty">Você ainda não foi vinculado a nenhum grupo. Fale com o organizador.</div></div>';
+    return;
+  }
+  currentGroup = me.groups[0].id;
+  await render();
+  setInterval(async ()=>{ await render(); }, 15000); // atualiza sozinho, útil se houver mais de um fiscal no mesmo grupo
+}
+
+async function render(){
+  const athletes = await api('/api/athletes');
+  const byId = Object.fromEntries(athletes.map(a=>[a.id,a]));
+  const groupSelector = me.groups.length > 1 ? `
+    <div class="panel">
+      <label>Seu grupo</label>
+      <select onchange="currentGroup=this.value; render();">
+        ${me.groups.map(g=>`<option value="${g.id}" ${currentGroup===g.id?'selected':''}>${g.name}</option>`).join('')}
+      </select>
+    </div>` : `<p class="desc">Grupo: <b>${me.groups[0].name}</b></p>`;
+
+  const rounds = await api('/api/groups/'+currentGroup+'/rounds');
+  let roundsHtml = `<div style="margin-bottom:10px;"><button class="btn" onclick="genRound()">Gerar próxima rodada</button></div>`;
+  roundsHtml += rounds.length===0 ? '<div class="empty">Nenhuma rodada ainda.</div>' :
+    rounds.slice().reverse().map(rnd=>{
+      const roundNumber = rnd[0]?.roundNumber;
+      return `<div style="margin-top:10px;"><b>Rodada ${roundNumber}</b>` + rnd.map(m=>{
+        if(m.isBye){ const a=byId[m.byeAthleteId]; return `<div class="match-row"><div>${a?a.full_name:'—'} (BYE)</div><div></div><div></div></div>`; }
+        const w=byId[m.whiteId], b=byId[m.blackId];
+        return `<div class="match-row">
+          <div>${w?w.full_name:'—'} (brancas)</div>
+          <div>${b?b.full_name:'—'} (pretas)</div>
+          <div class="result-btns">
+            <button class="${m.result==='1-0'?'sel':''}" onclick="recordResult('${m.id}','white')">1-0</button>
+            <button class="${m.result==='0.5-0.5'?'sel':''}" onclick="recordResult('${m.id}','draw')">½-½</button>
+            <button class="${m.result==='0-1'?'sel':''}" onclick="recordResult('${m.id}','black')">0-1</button>
+          </div></div>`;
+      }).join('') + `</div>`;
+    }).join('');
+
+  const standings = await api('/api/groups/'+currentGroup+'/standings');
+  const standHtml = standings.rows.length===0 ? '<div class="empty">Sem atletas.</div>' :
+    `<table><thead><tr><th>#</th><th>Atleta</th><th>Pontos</th></tr></thead><tbody>
+      ${standings.rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.fullName}</td><td><b>${r.points}</b></td></tr>`).join('')}
+    </tbody></table>`;
+
+  document.getElementById('content').innerHTML = `
+    ${groupSelector}
+    <div class="panel"><h2>Rodadas</h2>${roundsHtml}</div>
+    <div class="panel"><h2>Classificação</h2>${standHtml}</div>
+  `;
+}
+async function genRound(){ try{ await api('/api/groups/'+currentGroup+'/generate-round', {method:'POST'}); render(); }catch(e){} }
+async function recordResult(mid, outcome){ try{ await api('/api/matches/'+mid+'/result', {method:'POST', body:JSON.stringify({outcome})}); render(); }catch(e){} }
+
+init();
+</script>
+</body>
+</html>

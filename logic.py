@@ -176,3 +176,22 @@ def compute_elo_update(rating_white, rating_black, outcome, k_white, k_black):
     delta_black = round(k_black * (score_black - e_black))
     result_str = "1-0" if outcome == "white" else ("0.5-0.5" if outcome == "draw" else "0-1")
     return delta_white, delta_black, result_str
+
+
+def normalize_cpf(raw):
+    """Remove tudo que não é dígito. Retorna string vazia se não houver nada."""
+    return "".join(c for c in str(raw or "") if c.isdigit())
+
+
+def is_valid_cpf(digits):
+    """Validação oficial do CPF (dígitos verificadores), não só o tamanho.
+    Recebe já normalizado (só dígitos)."""
+    if len(digits) != 11 or digits == digits[0] * 11:
+        return False
+    def digit(base):
+        s = sum(int(d) * w for d, w in zip(base, range(len(base) + 1, 1, -1)))
+        r = (s * 10) % 11
+        return 0 if r == 10 else r
+    d1 = digit(digits[:9])
+    d2 = digit(digits[:9] + str(d1))
+    return digits[-2:] == f"{d1}{d2}"
