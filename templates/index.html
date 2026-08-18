@@ -24,6 +24,7 @@ const TABS = [
   {id:'rodadas', label:'Rodadas'},
   {id:'classificacao', label:'Classificação'},
   {id:'fiscais', label:'Fiscais'},
+  {id:'publico', label:'Quadro Público'},
 ];
 let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0 };
 let cache = { categories:[], groups:[], athletes:[], rules:[], users:[] };
@@ -67,6 +68,7 @@ async function render(){
   else if(ui.tab==='rodadas') c.innerHTML = await renderRodadas();
   else if(ui.tab==='classificacao') c.innerHTML = await renderClassificacao();
   else if(ui.tab==='fiscais') c.innerHTML = renderFiscais();
+  else if(ui.tab==='publico') c.innerHTML = await renderQuadroPublico();
 }
 
 function renderCategorias(){
@@ -411,6 +413,31 @@ async function addUser(){
 async function delUser(id){
   if(!confirm('Remover este fiscal? Ele perde o acesso imediatamente.')) return;
   try{ await api('/api/users/'+id, {method:'DELETE'}); render(); }catch(e){}
+}
+
+async function renderQuadroPublico(){
+  const links = await api('/api/public-links');
+  return `
+  <div class="panel">
+    <h2>Quadro Público por Grupo</h2>
+    <p class="desc">Cada grupo abaixo tem um link e um QR Code próprios, que abrem uma tela sem login, sem controles
+    de edição — só a rodada atual e a classificação, atualizando sozinha a cada 15 segundos. O QR Code é gerado
+    direto pelo servidor (funciona mesmo sem internet externa no dia do torneio). Imprima e cole ao lado do quadro
+    físico, ou projete o link direto.</p>
+    ${links.length===0 ? '<div class="empty">Nenhum grupo disponível ainda.</div>' :
+      links.map(l=>`
+        <div class="public-row" style="display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--border); flex-wrap:wrap;">
+          <div>
+            <b>${l.categoryName} · ${l.gender==='M'?'Masculino':'Feminino'} · ${l.name}</b><br>
+            <a href="${l.url}" target="_blank" style="color:var(--ice-soft, #6fa8dc); font-size:12.5px;">${l.url}</a>
+          </div>
+          <div style="background:#f3f0e8; padding:8px; border-radius:8px;">
+            <img src="${l.qrUrl}" width="120" height="120" style="display:block;">
+          </div>
+        </div>
+      `).join('')
+    }
+  </div>`;
 }
 
 render();

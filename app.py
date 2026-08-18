@@ -6,9 +6,11 @@ e um endpoint público de leitura para o quadro público (sem login).
 """
 import os
 import secrets
+import io
 from functools import wraps
-from flask import Flask, request, jsonify, render_template, session, redirect
+from flask import Flask, request, jsonify, render_template, session, redirect, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
+import qrcode
 from db import init_db, write_transaction, read_conn
 from logic import (new_id, k_for, points_for, opponents_of, had_bye, has_played,
                     pair_by_score_brackets, assign_colors, compute_elo_update,
@@ -774,6 +776,44 @@ def public_rounds(gid):
 def public_standings(gid):
     with read_conn() as conn:
         return jsonify(compute_standings(conn, gid))
+
+
+# ---------- QR Code (gerado no próprio servidor, funciona sem internet externa) ----------
+
+def public_group_url(gid):
+    # request.host_url já inclui o domínio certo (localhost, ou torneioxadrez.pythonanywhere.com)
+    return request.host_url.rstrip("/") + "/publico/" + gid
+
+@app.route("/qrcode/group/<gid>.png")
+def qrcode_group(gid):
+    url = public_group_url(gid)
+    img = qrcode.make(url, box_size=8, border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
+@app.route("/api/public-links", methods=["GET"])
+@login_required
+def public_links():
+    """Lista todos os grupos (que o usuário pode ver) com o link público pronto,
+    para montar a tela de QR Codes no painel administrativo."""
+    with read_conn() as conn:
+        gids = user_group_ids(conn)
+        if not gids:
+            return jsonify([])
+        placeholders = ",".join("?" * len(gids))
+        groups = conn.execute(f"SELECT * FROM groups_t WHERE id IN ({placeholders})", gids).fetchall()
+        out = []
+        for g in groups:
+            cat = conn.execute("SELECT name FROM categories WHERE id=?", (g["category_id"],)).fetchone()
+            out.append({
+                "id": g["id"], "name": g["name"], "gender": g["gender"],
+                "categoryName": cat["name"] if cat else "—",
+                "url": public_group_url(g["id"]),
+                "qrUrl": f"/qrcode/group/{g['id']}.png",
+            })
+        return jsonify(out)
 
 
 # ---------- zona de perigo (só admin) — para desfazer uma importação errada ----------
