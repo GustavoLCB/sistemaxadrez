@@ -58,6 +58,7 @@
   <span class="floating-piece p9">♟</span>
 
 <div class="app">
+  <button class="btn secondary" onclick="history.back()" style="margin-bottom:14px;">← Voltar</button>
   <h1>Quadro Público</h1>
   <div id="content"></div>
   <p style="text-align:center; color:var(--text-muted); font-size:12px;">Atualiza automaticamente a cada 15s</p>
@@ -65,21 +66,8 @@
 <script>
 const groupId = "{{ group_id }}";
 async function paint(){
-  const [rounds, standings] = await Promise.all([
-    fetch('/api/public/groups/'+groupId+'/rounds').then(r=>r.json()),
-    fetch('/api/public/groups/'+groupId+'/standings').then(r=>r.json()),
-  ]);
-  let html = '';
-  if(rounds.length){
-    const last = rounds[rounds.length-1];
-    html += `<div class="panel"><h2>Rodada ${last[0]?.roundNumber||''}</h2><table class="kiosk-table"><thead><tr><th>Brancas</th><th></th><th>Pretas</th><th>Resultado</th></tr></thead><tbody>`;
-    last.forEach(m=>{
-      if(m.isBye){ html += `<tr><td colspan="3">${m.byeName||'—'} (BYE)</td><td>+1</td></tr>`; return; }
-      html += `<tr><td>${m.whiteName||'—'}</td><td>×</td><td>${m.blackName||'—'}</td><td>${m.result||'em jogo'}</td></tr>`;
-    });
-    html += '</tbody></table></div>';
-  }
-  html += `<div class="panel"><h2>Classificação</h2><table class="kiosk-table"><thead><tr><th>#</th><th>Atleta</th><th>Pontos</th></tr></thead><tbody>
+  const standings = await fetch('/api/public/groups/'+groupId+'/standings').then(r=>r.json());
+  const html = `<div class="panel"><h2>Classificação</h2><table class="kiosk-table"><thead><tr><th>#</th><th>Atleta</th><th>Pontos</th></tr></thead><tbody>
     ${standings.rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.fullName}</td><td><b>${r.points}</b></td></tr>`).join('')}
   </tbody></table></div>`;
   document.getElementById('content').innerHTML = html;

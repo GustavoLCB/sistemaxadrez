@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS groups_t (
     id TEXT PRIMARY KEY,
     category_id TEXT NOT NULL REFERENCES categories(id),
     gender TEXT NOT NULL CHECK(gender IN ('M','F')),
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    max_rounds INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS athletes (
@@ -127,6 +128,9 @@ def _migrate(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_athletes_cpf ON athletes(cpf) "
         "WHERE cpf IS NOT NULL AND cpf != ''"
     )
+    group_cols = [r["name"] for r in conn.execute("PRAGMA table_info(groups_t)").fetchall()]
+    if "max_rounds" not in group_cols:
+        conn.execute("ALTER TABLE groups_t ADD COLUMN max_rounds INTEGER")
 
 @contextmanager
 def write_transaction():

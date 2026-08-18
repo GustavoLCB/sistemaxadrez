@@ -310,7 +310,12 @@ def list_groups():
         if not gids:
             return jsonify([])
         placeholders = ",".join("?" * len(gids))
-        rows = conn.execute(f"SELECT * FROM groups_t WHERE id IN ({placeholders})", gids).fetchall()
+        rows = conn.execute(
+            f"""SELECT g.*, c.name as category_name FROM groups_t g
+                JOIN categories c ON c.id = g.category_id
+                WHERE g.id IN ({placeholders})
+                ORDER BY c.name, g.gender, g.name""", gids
+        ).fetchall()
         return jsonify([row_to_dict(r) for r in rows])
 
 @app.route("/api/groups", methods=["POST"])
@@ -319,13 +324,29 @@ def list_groups():
 def create_group():
     data = request.get_json()
     category_id, gender, name = data.get("categoryId"), data.get("gender"), (data.get("name") or "").strip()
+    max_rounds = data.get("maxRounds")
+    max_rounds = int(max_rounds) if max_rounds not in (None, "") else None
     if not (category_id and gender in ("M", "F") and name):
         return jsonify({"error": "Dados incompletos"}), 400
     with write_transaction() as conn:
         gid = new_id()
-        conn.execute("INSERT INTO groups_t (id, category_id, gender, name) VALUES (?,?,?,?)",
-                     (gid, category_id, gender, name))
-        return jsonify({"id": gid, "categoryId": category_id, "gender": gender, "name": name})
+        conn.execute("INSERT INTO groups_t (id, category_id, gender, name, max_rounds) VALUES (?,?,?,?,?)",
+                     (gid, category_id, gender, name, max_rounds))
+        return jsonify({"id": gid, "categoryId": category_id, "gender": gender, "name": name, "maxRounds": max_rounds})
+
+@app.route("/api/groups/<gid>", methods=["PATCH"])
+@login_required
+@admin_required
+def update_group(gid):
+    data = request.get_json()
+    with write_transaction() as conn:
+        if "name" in data:
+            conn.execute("UPDATE groups_t SET name=? WHERE id=?", (data["name"], gid))
+        if "maxRounds" in data:
+            mr = data["maxRounds"]
+            mr = int(mr) if mr not in (None, "") else None
+            conn.execute("UPDATE groups_t SET max_rounds=? WHERE id=?", (mr, gid))
+        return jsonify({"ok": True})
 
 @app.route("/api/groups/<gid>", methods=["DELETE"])
 @login_required
@@ -592,14 +613,21 @@ def list_rounds(gid):
 @app.route("/api/groups/<gid>/generate-round", methods=["POST"])
 @login_required
 def generate_round(gid):
+    data = request.get_json(silent=True) or {}
+    forced_bye_id = data.get("forcedByeAthleteId")
     with write_transaction() as conn:
         if not can_access_group(conn, gid):
             return jsonify({"error": "Você não tem acesso a este grupo"}), 403
+        group = conn.execute("SELECT * FROM groups_t WHERE id=?", (gid,)).fetchone()
         players = conn.execute("SELECT * FROM athletes WHERE group_id=?", (gid,)).fetchall()
         if len(players) < 2:
             return jsonify({"error": "É preciso ao menos 2 atletas no grupo"}), 400
 
         matches_by_round = group_matches_by_round(conn, gid)
+
+        if group["max_rounds"] and len(matches_by_round) >= group["max_rounds"]:
+            return jsonify({"error": f"Este grupo está limitado a {group['max_rounds']} rodada(s), e esse número já foi atingido."}), 400
+
         if matches_by_round:
             last = matches_by_round[-1]
             if any((not m["isBye"]) and m["result"] is None for m in last):
@@ -607,19 +635,30 @@ def generate_round(gid):
 
         all_matches_flat = flatten(matches_by_round)
         players_dicts = [dict(p) for p in players]
-        for p in players_dicts:
-            p["id"] = p["id"]
         score_of = {p["id"]: points_for(p["id"], all_matches_flat) for p in players_dicts}
         pool = sorted(players_dicts, key=lambda a: (-score_of[a["id"]], -a["rating"], a["full_name"]))
 
-        bye_athlete = None
+        bye_entries = []  # pode ter mais de um BYE na rodada quando há BYE manual + BYE automático
+
+        # BYE manual: o organizador escolheu deliberadamente tirar um atleta específico desta rodada
+        # (ex: atleta passando mal). Tem prioridade sobre a escolha automática.
+        if forced_bye_id:
+            idx = next((i for i, p in enumerate(pool) if p["id"] == forced_bye_id), None)
+            if idx is None:
+                return jsonify({"error": "Atleta escolhido para o BYE manual não está neste grupo (ou já não está mais disponível)"}), 400
+            bye_entries.append(pool.pop(idx))
+
+        # BYE automático: só entra em ação se, depois do BYE manual (se houver), ainda sobrar
+        # número ímpar de jogadores para parear.
         if len(pool) % 2 == 1:
+            auto_bye = None
             for i in range(len(pool) - 1, -1, -1):
                 if not had_bye(pool[i]["id"], all_matches_flat):
-                    bye_athlete = pool.pop(i)
+                    auto_bye = pool.pop(i)
                     break
-            if bye_athlete is None:
-                bye_athlete = pool.pop()
+            if auto_bye is None:
+                auto_bye = pool.pop()
+            bye_entries.append(auto_bye)
 
         pool_for_pairing = [{"id": p["id"], "rating": p["rating"]} for p in pool]
         pairs = pair_by_score_brackets(pool_for_pairing, score_of, matches_by_round)
@@ -634,7 +673,7 @@ def generate_round(gid):
             conn.execute("""INSERT INTO matches (id, round_id, group_id, white_id, black_id, is_bye)
                              VALUES (?,?,?,?,?,0)""",
                          (new_id(), round_id, gid, white["id"], black["id"]))
-        if bye_athlete:
+        for bye_athlete in bye_entries:
             conn.execute("""INSERT INTO matches (id, round_id, group_id, is_bye, bye_athlete_id, result, applied)
                              VALUES (?,?,?,1,?,?,1)""",
                          (new_id(), round_id, gid, bye_athlete["id"], "bye"))
@@ -803,17 +842,117 @@ def public_links():
         if not gids:
             return jsonify([])
         placeholders = ",".join("?" * len(gids))
-        groups = conn.execute(f"SELECT * FROM groups_t WHERE id IN ({placeholders})", gids).fetchall()
+        groups = conn.execute(
+            f"""SELECT g.*, c.name as category_name FROM groups_t g
+                JOIN categories c ON c.id = g.category_id
+                WHERE g.id IN ({placeholders})
+                ORDER BY c.name, g.gender, g.name""", gids
+        ).fetchall()
         out = []
         for g in groups:
-            cat = conn.execute("SELECT name FROM categories WHERE id=?", (g["category_id"],)).fetchone()
             out.append({
                 "id": g["id"], "name": g["name"], "gender": g["gender"],
-                "categoryName": cat["name"] if cat else "—",
+                "categoryName": g["category_name"],
                 "url": public_group_url(g["id"]),
                 "qrUrl": f"/qrcode/group/{g['id']}.png",
             })
         return jsonify(out)
+
+
+# ---------- histórico entre torneios (arquivar + consultar evolução de um atleta) ----------
+# Cada torneio nesta base é um evento contínuo (não existe uma "data de início/fim" nativa).
+# Para ter um histórico de verdade entre um torneio e outro, o organizador tira uma
+# "fotografia" do estado final (nome, CPF, colégio, categoria, pontos, rating) antes de
+# usar a Zona de Perigo para preparar a base para o próximo torneio. Depois, a busca por
+# nome ou CPF junta essas fotografias com os dados do torneio em andamento.
+
+@app.route("/api/tournament/archive", methods=["POST"])
+@login_required
+@admin_required
+def archive_tournament():
+    data = request.get_json()
+    name = (data.get("name") or "").strip()
+    date = (data.get("date") or "").strip()
+    if not name:
+        return jsonify({"error": "Dê um nome para o torneio antes de arquivar"}), 400
+    with write_transaction() as conn:
+        athletes = conn.execute("SELECT * FROM athletes").fetchall()
+        if not athletes:
+            return jsonify({"error": "Não há atletas cadastrados para arquivar"}), 400
+        archive_id = new_id()
+        conn.execute("INSERT INTO tournament_archive (id, tournament_name, date) VALUES (?,?,?)",
+                     (archive_id, name, date or None))
+        for a in athletes:
+            cat = conn.execute("SELECT name FROM categories WHERE id=?", (a["category_id"],)).fetchone()
+            grp = conn.execute("SELECT name FROM groups_t WHERE id=?", (a["group_id"],)).fetchone() if a["group_id"] else None
+            points = 0
+            if a["group_id"]:
+                matches_by_round = group_matches_by_round(conn, a["group_id"])
+                points = points_for(a["id"], flatten(matches_by_round))
+            conn.execute("""INSERT INTO archive_entries
+                (id, archive_id, full_name, gender, school, category_name, group_name, k_flag, rating, points)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (new_id(), archive_id, a["full_name"], a["gender"], a["school"],
+                 cat["name"] if cat else "—", grp["name"] if grp else "—", a["k_flag"], a["rating"], points))
+        return jsonify({"ok": True, "archiveId": archive_id, "athletesArchived": len(athletes)})
+
+@app.route("/api/tournament/archive", methods=["GET"])
+@login_required
+@admin_required
+def list_archives():
+    with read_conn() as conn:
+        rows = conn.execute("SELECT * FROM tournament_archive ORDER BY date DESC").fetchall()
+        out = []
+        for r in rows:
+            count = conn.execute("SELECT COUNT(*) c FROM archive_entries WHERE archive_id=?", (r["id"],)).fetchone()["c"]
+            out.append({"id": r["id"], "tournamentName": r["tournament_name"], "date": r["date"], "athleteCount": count})
+        return jsonify(out)
+
+@app.route("/api/tournament/archive/<aid>", methods=["DELETE"])
+@login_required
+@admin_required
+def delete_archive(aid):
+    with write_transaction() as conn:
+        conn.execute("DELETE FROM archive_entries WHERE archive_id=?", (aid,))
+        conn.execute("DELETE FROM tournament_archive WHERE id=?", (aid,))
+        return jsonify({"ok": True})
+
+@app.route("/api/athletes/history", methods=["GET"])
+@login_required
+@admin_required
+def athlete_history():
+    query = (request.args.get("q") or "").strip().lower()
+    if not query:
+        return jsonify([])
+    with read_conn() as conn:
+        rows = []
+        archived = conn.execute("""
+            SELECT ae.*, ta.tournament_name, ta.date FROM archive_entries ae
+            JOIN tournament_archive ta ON ta.id = ae.archive_id
+            WHERE lower(ae.full_name) LIKE ?
+        """, (f"%{query}%",)).fetchall()
+        for r in archived:
+            rows.append({
+                "tournamentName": r["tournament_name"], "date": r["date"] or "",
+                "fullName": r["full_name"], "school": r["school"], "categoryName": r["category_name"],
+                "groupName": r["group_name"], "points": r["points"], "rating": r["rating"], "isCurrent": False
+            })
+        current = conn.execute("SELECT * FROM athletes WHERE lower(full_name) LIKE ?", (f"%{query}%",)).fetchall()
+        for a in current:
+            cat = conn.execute("SELECT name FROM categories WHERE id=?", (a["category_id"],)).fetchone()
+            grp = conn.execute("SELECT name FROM groups_t WHERE id=?", (a["group_id"],)).fetchone() if a["group_id"] else None
+            points = 0
+            if a["group_id"]:
+                matches_by_round = group_matches_by_round(conn, a["group_id"])
+                points = points_for(a["id"], flatten(matches_by_round))
+            rows.append({
+                "tournamentName": "(torneio em andamento)", "date": "9999-99-99",
+                "fullName": a["full_name"], "school": a["school"],
+                "categoryName": cat["name"] if cat else "—", "groupName": grp["name"] if grp else "—",
+                "points": points, "rating": a["rating"], "isCurrent": True
+            })
+        rows.sort(key=lambda r: r["date"])
+        return jsonify(rows)
 
 
 # ---------- zona de perigo (só admin) — para desfazer uma importação errada ----------

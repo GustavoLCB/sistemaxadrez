@@ -25,8 +25,10 @@ const TABS = [
   {id:'classificacao', label:'Classificação'},
   {id:'fiscais', label:'Fiscais'},
   {id:'publico', label:'Quadro Público'},
+  {id:'historico', label:'Histórico'},
+  {id:'explicacoes', label:'Explicações/Regras'},
 ];
-let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0 };
+let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0, historyQuery:'' };
 let cache = { categories:[], groups:[], athletes:[], rules:[], users:[] };
 
 function toast(msg){
@@ -69,6 +71,8 @@ async function render(){
   else if(ui.tab==='classificacao') c.innerHTML = await renderClassificacao();
   else if(ui.tab==='fiscais') c.innerHTML = renderFiscais();
   else if(ui.tab==='publico') c.innerHTML = await renderQuadroPublico();
+  else if(ui.tab==='historico') c.innerHTML = await renderHistorico();
+  else if(ui.tab==='explicacoes') c.innerHTML = renderExplicacoes();
 }
 
 function renderCategorias(){
@@ -110,8 +114,9 @@ function renderGrupos(){
       <div><label>Categoria</label><select id="grp-cat">${cache.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
       <div><label>Gênero</label><select id="grp-gender"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
       <div><label>Nome</label><input id="grp-name" placeholder="Grupo A"></div>
-      <div style="display:flex; align-items:flex-end;"><button class="btn" style="width:100%;" onclick="addGroup()">Criar</button></div>
+      <div><label>Máx. de rodadas (opcional)</label><input id="grp-maxrounds" type="number" placeholder="sem limite"></div>
     </div>
+    <div style="margin-top:10px;"><button class="btn" onclick="addGroup()">Criar</button></div>
   </div>
   <div class="panel">
     <h2>Dividir automaticamente em N grupos (seed em cobra)</h2>
@@ -124,11 +129,14 @@ function renderGrupos(){
   </div>
   <div class="panel">
     <h2>Grupos (${cache.groups.length})</h2>
-    ${cache.groups.length? `<table><thead><tr><th>Categoria</th><th>Gênero</th><th>Grupo</th><th>Atletas</th><th></th></tr></thead><tbody>
+    <p class="desc">"Máx. rodadas" limita o torneio suíço daquele grupo a um número fixo de rodadas, mesmo que ainda daria para gerar mais — clique no número para editar.</p>
+    ${cache.groups.length? `<table><thead><tr><th>Categoria</th><th>Gênero</th><th>Grupo</th><th>Atletas</th><th>Máx. rodadas</th><th></th></tr></thead><tbody>
       ${cache.groups.map(g=>{
         const cat=catById(g.category_id);
         const count = cache.athletes.filter(a=>a.group_id===g.id).length;
-        return `<tr><td>${cat?cat.name:'—'}</td><td>${g.gender}</td><td>${g.name}</td><td>${count}</td><td><button class="btn danger" onclick="delGroup('${g.id}')">Remover</button></td></tr>`;
+        return `<tr><td>${g.category_name||(cat?cat.name:'—')}</td><td>${g.gender}</td><td>${g.name}</td><td>${count}</td>
+          <td><input type="number" value="${g.max_rounds??''}" placeholder="sem limite" style="width:100px;" onchange="setMaxRounds('${g.id}', this.value)"></td>
+          <td><button class="btn danger" onclick="delGroup('${g.id}')">Remover</button></td></tr>`;
       }).join('')}
     </tbody></table>` : '<div class="empty">Nenhum grupo.</div>'}
   </div>`;
@@ -137,7 +145,11 @@ async function addGroup(){
   const categoryId = document.getElementById('grp-cat').value;
   const gender = document.getElementById('grp-gender').value;
   const name = document.getElementById('grp-name').value;
-  try{ await api('/api/groups', {method:'POST', body:JSON.stringify({categoryId,gender,name})}); render(); }catch(e){}
+  const maxRounds = document.getElementById('grp-maxrounds').value;
+  try{ await api('/api/groups', {method:'POST', body:JSON.stringify({categoryId,gender,name,maxRounds})}); render(); }catch(e){}
+}
+async function setMaxRounds(id, value){
+  try{ await api('/api/groups/'+id, {method:'PATCH', body:JSON.stringify({maxRounds: value})}); toast('Limite de rodadas atualizado.'); render(); }catch(e){}
 }
 async function delGroup(id){ try{ await api('/api/groups/'+id, {method:'DELETE'}); render(); }catch(e){} }
 async function autoSplit(){
@@ -155,7 +167,7 @@ function renderAtletas(){
       <div><label>Nome completo</label><input id="af-name"></div>
       <div><label>Gênero</label><select id="af-gender"><option value="M">M</option><option value="F">F</option></select></div>
       <div><label>Categoria</label><select id="af-cat">${cache.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
-      <div><label>Faixa (K)</label><select id="af-k"><option value="iniciante">Iniciante</option><option value="regular">Regular</option><option value="mestre">Mestre</option></select></div>
+      <div><label>Faixa (K)</label><select id="af-k"><option value="iniciante">Iniciante (K=40)</option><option value="regular">Regular (K=20)</option><option value="mestre">Mestre (K=10)</option></select></div>
     </div>
     <div class="grid cols-4" style="margin-top:10px;">
       <div><label>CPF (opcional, mas recomendado)</label><input id="af-cpf" placeholder="000.000.000-00"></div>
@@ -164,8 +176,14 @@ function renderAtletas(){
     <div style="margin-top:10px;"><button class="btn" onclick="addAthlete()">Adicionar</button></div>
   </div>
 
-  <div class="panel">
+  <div class="panel" style="${cache.rules.length===0 ? 'border:1px solid var(--gold);' : ''}">
     <h2>Importação em massa (Excel / CSV)</h2>
+    ${cache.rules.length===0 ? `
+      <p class="desc" style="color:var(--gold-soft, #e4c584); background:rgba(201,160,78,0.1); padding:10px; border-radius:8px;">
+        ⚠️ <b>Você ainda não cadastrou nenhuma faixa de idade → categoria.</b> Vá na aba <b>Categorias</b> e crie ao menos uma
+        (ex: "Sub-9" de 7 a 9 anos) antes de importar — sem isso, todos os atletas importados cairão numa categoria genérica
+        de "sem categoria" e você vai precisar movê-los manualmente depois.
+      </p>` : ''}
     <p class="desc">Planilha com colunas Nome, Idade, Colégio (e opcionalmente Gênero, CPF). A categoria de cada atleta é
     definida automaticamente pela idade, usando as faixas cadastradas na aba Categorias — cadastre-as antes de importar.
     Se um grupo ainda não existir para a combinação categoria+gênero, ele é criado sozinho, dividindo os atletas em
@@ -173,7 +191,7 @@ function renderAtletas(){
     em importações repetidas — mais confiável do que comparar só pelo nome.</p>
     <div class="grid cols-4">
       <div><label>Gênero padrão (se a planilha não tiver essa coluna)</label><select id="imp-gender"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
-      <div><label>Faixa padrão (K)</label><select id="imp-k"><option value="iniciante">Iniciante</option><option value="regular">Regular</option><option value="mestre">Mestre</option></select></div>
+      <div><label>Faixa padrão (K)</label><select id="imp-k"><option value="iniciante">Iniciante (K=40)</option><option value="regular">Regular (K=20)</option><option value="mestre">Mestre (K=10)</option></select></div>
       <div><label>Rating inicial padrão</label><input id="imp-rating" type="number" value="1500"></div>
       <div><label>Atletas por grupo</label><input id="imp-groupsize" type="number" value="25"></div>
     </div>
@@ -328,11 +346,28 @@ async function delAthlete(id){ try{ await api('/api/athletes/'+id, {method:'DELE
 
 async function renderRodadas(){
   if(!ui.roundsGroup && cache.groups.length) ui.roundsGroup = cache.groups[0].id;
-  const options = cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}" ${ui.roundsGroup===g.id?'selected':''}>${cat?cat.name:''} · ${g.gender} · ${g.name}</option>`;}).join('');
+  const options = cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}" ${ui.roundsGroup===g.id?'selected':''}>${g.category_name||(cat?cat.name:'')} · ${g.gender} · ${g.name}</option>`;}).join('');
   let body = '<div class="empty">Crie um grupo.</div>';
   if(ui.roundsGroup){
+    const group = cache.groups.find(g=>g.id===ui.roundsGroup);
     const rounds = await api('/api/groups/'+ui.roundsGroup+'/rounds');
-    body = `<div style="margin-bottom:10px;"><button class="btn" onclick="genRound()">Gerar próxima rodada</button></div>`;
+    const groupAthletes = cache.athletes.filter(a=>a.group_id===ui.roundsGroup);
+    const limitReached = group && group.max_rounds && rounds.length >= group.max_rounds;
+    const limitLabel = group && group.max_rounds ? `${rounds.length} de ${group.max_rounds} rodada(s)` : `${rounds.length} rodada(s), sem limite definido`;
+
+    const byeOptions = groupAthletes.map(a=>`<option value="${a.id}">${a.full_name}</option>`).join('');
+    body = `
+      <div class="grid cols-3" style="margin-bottom:10px; align-items:flex-end;">
+        <div><label>BYE manual nesta próxima rodada (opcional)</label>
+          <select id="rd-forced-bye"><option value="">Nenhum — deixar automático</option>${byeOptions}</select>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <span class="desc" style="margin:0;">${limitLabel}</span>
+          <button class="btn" ${limitReached?'disabled':''} onclick="genRound()">Gerar próxima rodada</button>
+        </div>
+      </div>
+      ${limitReached ? `<p class="desc" style="color:var(--gold-soft, #e4c584);">Este grupo atingiu o limite de rodadas configurado — ajuste em Grupos se quiser liberar mais.</p>` : ''}
+    `;
     body += rounds.length===0 ? '<div class="empty">Nenhuma rodada ainda.</div>' :
       rounds.slice().reverse().map(rnd=>{
         const roundNumber = rnd[0]?.roundNumber;
@@ -352,7 +387,10 @@ async function renderRodadas(){
   }
   return `<div class="panel"><h2>Rodadas</h2><select onchange="ui.roundsGroup=this.value; render();">${options}</select><div style="margin-top:14px;">${body}</div></div>`;
 }
-async function genRound(){ try{ await api('/api/groups/'+ui.roundsGroup+'/generate-round', {method:'POST'}); render(); }catch(e){} }
+async function genRound(){
+  const forcedByeAthleteId = document.getElementById('rd-forced-bye')?.value || null;
+  try{ await api('/api/groups/'+ui.roundsGroup+'/generate-round', {method:'POST', body:JSON.stringify({forcedByeAthleteId})}); render(); }catch(e){}
+}
 async function recordResult(mid, outcome){ try{ await api('/api/matches/'+mid+'/result', {method:'POST', body:JSON.stringify({outcome})}); render(); }catch(e){} }
 
 async function renderClassificacao(){
@@ -437,6 +475,108 @@ async function renderQuadroPublico(){
         </div>
       `).join('')
     }
+  </div>`;
+}
+
+async function renderHistorico(){
+  const archives = await api('/api/tournament/archive');
+  const q = ui.historyQuery || '';
+  let historyResults = '';
+  if(q.trim()){
+    const rows = await api('/api/athletes/history?q='+encodeURIComponent(q));
+    historyResults = rows.length===0 ? '<div class="empty">Nenhum atleta encontrado com esse nome.</div>' : `
+      <table><thead><tr><th>Torneio</th><th>Data</th><th>Categoria</th><th>Grupo</th><th>Pontos</th><th>Rating</th></tr></thead><tbody>
+        ${rows.map(r=>`<tr><td>${r.tournamentName}${r.isCurrent?' <span class="tag">em andamento</span>':''}</td><td>${r.isCurrent?'—':r.date}</td><td>${r.categoryName}</td><td>${r.groupName}</td><td>${r.points}</td><td>${r.rating}</td></tr>`).join('')}
+      </tbody></table>`;
+  }
+  return `
+  <div class="panel">
+    <h2>Arquivar torneio atual</h2>
+    <p class="desc">Antes de preparar a base para um novo torneio (usando a Zona de Perigo, na aba Atletas), tire uma
+    "fotografia" do estado atual — nome, colégio, categoria, pontos e rating final de cada atleta. Isso preserva o
+    histórico mesmo depois de você limpar os grupos/atletas para o próximo evento.</p>
+    <div class="grid cols-3">
+      <div><label>Nome do torneio</label><input id="arch-name" placeholder="Ex: Copa Escolar 1º Semestre 2026"></div>
+      <div><label>Data</label><input id="arch-date" type="date"></div>
+      <div style="display:flex; align-items:flex-end;"><button class="btn secondary" style="width:100%;" onclick="archiveTournament()">Arquivar torneio atual</button></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Torneios arquivados (${archives.length})</h2>
+    ${archives.length===0 ? '<div class="empty">Nenhum torneio arquivado ainda.</div>' : `
+    <table><thead><tr><th>Torneio</th><th>Data</th><th>Atletas</th><th></th></tr></thead><tbody>
+      ${archives.map(a=>`<tr><td>${a.tournamentName}</td><td>${a.date||'—'}</td><td>${a.athleteCount}</td><td><button class="btn danger" onclick="deleteArchive('${a.id}')">Remover</button></td></tr>`).join('')}
+    </tbody></table>`}
+  </div>
+  <div class="panel">
+    <h2>Buscar evolução de um atleta</h2>
+    <p class="desc">Busca pelo nome em todos os torneios arquivados + no torneio em andamento. Mantenha a grafia do nome
+    parecida entre um torneio e outro para o sistema conseguir reconhecer a mesma pessoa (o CPF, quando cadastrado,
+    ajuda bastante nisso também).</p>
+    <input id="hist-search" placeholder="Digite o nome do atleta…" value="${q}" oninput="ui.historyQuery=this.value; debounceHistorySearch();" style="max-width:360px;">
+    <div style="margin-top:14px;">${historyResults}</div>
+  </div>`;
+}
+let historyTimer=null;
+function debounceHistorySearch(){ clearTimeout(historyTimer); historyTimer=setTimeout(render, 350); }
+async function archiveTournament(){
+  const name = document.getElementById('arch-name').value;
+  const date = document.getElementById('arch-date').value;
+  try{ const r = await api('/api/tournament/archive', {method:'POST', body:JSON.stringify({name,date})}); toast(`Arquivado: ${r.athletesArchived} atleta(s).`); render(); }catch(e){}
+}
+async function deleteArchive(id){
+  if(!confirm('Remover este torneio do histórico? Não pode ser desfeito.')) return;
+  try{ await api('/api/tournament/archive/'+id, {method:'DELETE'}); render(); }catch(e){}
+}
+
+function renderExplicacoes(){
+  return `
+  <div class="panel">
+    <h2>Como o torneio funciona — guia simples</h2>
+    <p class="desc">Explicação sem jargão, para qualquer pessoa entender: como o sistema organiza o campeonato, os pontos,
+    o rating e a classificação.</p>
+  </div>
+  <div class="panel">
+    <h2>1. Categoria, Gênero e Grupo</h2>
+    <p class="desc"><b>Categoria</b>: faixa de idade (ex: Sub-9, Sub-18). <b>Gênero</b>: Masculino e Feminino jogam
+    separados dentro da mesma categoria. <b>Grupo</b>: dentro de categoria+gênero, os atletas podem ser divididos em
+    grupos menores (ex: Grupo A, B) para reduzir o número de rodadas. Exemplo: um menino de 10 anos jogaria em
+    "Sub-11 Masculino — Grupo A".</p>
+  </div>
+  <div class="panel">
+    <h2>2. O Sistema Suíço (as 4 regras de ouro)</h2>
+    <p class="desc"><b>1)</b> Ninguém é eliminado — todos jogam todas as rodadas.<br>
+    <b>2)</b> Você joga contra quem tem sua pontuação (os líderes vão se encontrando aos poucos).<br>
+    <b>3)</b> Nunca se repete adversário no mesmo torneio.<br>
+    <b>4)</b> As cores das peças se equilibram — ninguém joga a mesma cor 3 vezes seguidas.<br>
+    <b>BYE</b> é a folga de quem sobra quando o número de jogadores é ímpar — ganha 1 ponto de graça, e nunca folga duas vezes.</p>
+  </div>
+  <div class="panel">
+    <h2>3. Pontuação</h2>
+    <p class="desc">Vitória = <b>1 ponto</b>. Empate = <b>½ ponto</b> para cada. Derrota = <b>0</b>. A soma decide a Classificação.</p>
+  </div>
+  <div class="panel">
+    <h2>4. Rating (Elo) e Fator K</h2>
+    <p class="desc">Todo atleta começa com um número de força (rating, normalmente 1500). Vencer alguém mais forte rende
+    mais pontos de rating do que vencer alguém mais fraco. O quanto varia depende da faixa do atleta:</p>
+    <table><thead><tr><th>Faixa</th><th>Fator K</th><th>Efeito</th></tr></thead><tbody>
+      <tr><td>Iniciante</td><td>40</td><td>Rating muda bastante — ajuda a achar o nível real rápido</td></tr>
+      <tr><td>Regular</td><td>20</td><td>Variação moderada</td></tr>
+      <tr><td>Mestre</td><td>10</td><td>Rating muda pouco — mais estável</td></tr>
+    </tbody></table>
+    <p class="desc" style="margin-top:8px;"><b>Exemplo prático:</b> um Iniciante de rating 1500 que vence um adversário de 1700 ganha cerca de 30 pontos de rating de uma vez (porque a vitória era pouco provável). Se o mesmo Iniciante vencesse alguém de 1300, ganharia só uns 10 pontos (era o esperado).</p>
+  </div>
+  <div class="panel">
+    <h2>5. Critérios de desempate</h2>
+    <p class="desc"><b>1º Buchholz:</b> soma a pontuação final de todos os adversários que o atleta enfrentou — prestigia
+    quem jogou contra adversários mais fortes.<br><b>2º Vitórias:</b> quem venceu mais partidas (em vez de empatar) fica
+    na frente.<br><b>3º Rating:</b> em último caso, desempata pelo rating.</p>
+  </div>
+  <div class="panel">
+    <h2>6. Quadro Público e Histórico</h2>
+    <p class="desc">Cada grupo tem um QR Code próprio (aba Quadro Público) que mostra a classificação em tempo real,
+    sem precisar de login. O Histórico (aba própria) guarda a evolução de cada atleta entre torneios diferentes ao
+    longo do ano.</p>
   </div>`;
 }
 
