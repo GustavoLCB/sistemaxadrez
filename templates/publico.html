@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quadro Público — Torneio de Xadrez</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  body{padding:30px;}
+  .kiosk-table{font-size:18px;}
+  .kiosk-table th{font-size:13px;}
+  h1{text-align:center;}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Quadro Público</h1>
+  <div id="content"></div>
+  <p style="text-align:center; color:var(--text-muted); font-size:12px;">Atualiza automaticamente a cada 15s</p>
+</div>
+<script>
+const groupId = "{{ group_id }}";
+async function paint(){
+  const [rounds, standings] = await Promise.all([
+    fetch('/api/groups/'+groupId+'/rounds').then(r=>r.json()),
+    fetch('/api/groups/'+groupId+'/standings').then(r=>r.json()),
+  ]);
+  const athletes = await fetch('/api/athletes').then(r=>r.json());
+  const byId = Object.fromEntries(athletes.map(a=>[a.id,a]));
+  let html = '';
+  if(rounds.length){
+    const last = rounds[rounds.length-1];
+    html += `<div class="panel"><h2>Rodada ${last[0]?.roundNumber||''}</h2><table class="kiosk-table"><thead><tr><th>Brancas</th><th></th><th>Pretas</th><th>Resultado</th></tr></thead><tbody>`;
+    last.forEach(m=>{
+      if(m.isBye){ const a=byId[m.byeAthleteId]; html += `<tr><td colspan="3">${a?a.full_name:'—'} (BYE)</td><td>+1</td></tr>`; return; }
+      const w=byId[m.whiteId], b=byId[m.blackId];
+      html += `<tr><td>${w?w.full_name:'—'}</td><td>×</td><td>${b?b.full_name:'—'}</td><td>${m.result||'em jogo'}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+  html += `<div class="panel"><h2>Classificação</h2><table class="kiosk-table"><thead><tr><th>#</th><th>Atleta</th><th>Pontos</th></tr></thead><tbody>
+    ${standings.rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.fullName}</td><td><b>${r.points}</b></td></tr>`).join('')}
+  </tbody></table></div>`;
+  document.getElementById('content').innerHTML = html;
+}
+paint();
+setInterval(paint, 15000);
+</script>
+</body>
+</html>

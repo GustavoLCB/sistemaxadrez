@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portal do Torneio — Xadrez Escolar (versão Flask)</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <h1>Portal do Torneio — Xadrez Escolar <span style="font-size:13px; color:var(--text-muted);">(versão Flask/SQLite)</span></h1>
+  <nav id="tabs"></nav>
+  <div id="content"></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const TABS = [
+  {id:'categorias', label:'Categorias'},
+  {id:'grupos', label:'Grupos'},
+  {id:'atletas', label:'Atletas'},
+  {id:'rodadas', label:'Rodadas'},
+  {id:'classificacao', label:'Classificação'},
+];
+let ui = { tab:'categorias', roundsGroup:null, standGroup:null };
+let cache = { categories:[], groups:[], athletes:[], rules:[] };
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2200);
+}
+async function api(path, opts){
+  const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts));
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok){ toast(data.error || 'Erro'); throw new Error(data.error||'erro'); }
+  return data;
+}
+async function refreshCache(){
+  cache.categories = await api('/api/categories');
+  cache.groups = await api('/api/groups');
+  cache.athletes = await api('/api/athletes');
+  cache.rules = await api('/api/category-rules');
+}
+function catById(id){ return cache.categories.find(c=>c.id===id); }
+function groupsOf(catId, gender){ return cache.groups.filter(g=>g.category_id===catId && g.gender===gender); }
+
+function renderTabs(){
+  document.getElementById('tabs').innerHTML = TABS.map(t=>
+    `<button class="${ui.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${t.label}</button>`).join('');
+}
+function switchTab(id){ ui.tab=id; render(); }
+
+async function render(){
+  renderTabs();
+  const c = document.getElementById('content');
+  await refreshCache();
+  if(ui.tab==='categorias') c.innerHTML = renderCategorias();
+  else if(ui.tab==='grupos') c.innerHTML = renderGrupos();
+  else if(ui.tab==='atletas') c.innerHTML = renderAtletas();
+  else if(ui.tab==='rodadas') c.innerHTML = await renderRodadas();
+  else if(ui.tab==='classificacao') c.innerHTML = await renderClassificacao();
+}
+
+function renderCategorias(){
+  return `
+  <div class="panel">
+    <h2>Faixas de idade → categoria</h2>
+    <p class="desc">Categoria nunca leva gênero no nome (ex: "Sub-14", nunca "Sub14-FEM").</p>
+    <div class="grid cols-4">
+      <div><label>Nome</label><input id="rule-name" placeholder="Sub-9"></div>
+      <div><label>Idade mín</label><input id="rule-min" type="number"></div>
+      <div><label>Idade máx</label><input id="rule-max" type="number"></div>
+      <div style="display:flex; align-items:flex-end;"><button class="btn" style="width:100%;" onclick="addRule()">Adicionar</button></div>
+    </div>
+    ${cache.rules.length? `<table style="margin-top:14px;"><thead><tr><th>Categoria</th><th>Faixa</th><th></th></tr></thead><tbody>
+      ${cache.rules.map(r=>{const cat=catById(r.category_id); return `<tr><td>${cat?cat.name:'—'}</td><td>${r.min_age}-${r.max_age}</td><td><button class="btn danger" onclick="delRule('${r.id}')">Remover</button></td></tr>`;}).join('')}
+    </tbody></table>` : '<div class="empty">Nenhuma faixa cadastrada.</div>'}
+  </div>
+  <div class="panel">
+    <h2>Categorias (${cache.categories.length})</h2>
+    ${cache.categories.length? `<table><thead><tr><th>Nome</th><th></th></tr></thead><tbody>
+      ${cache.categories.map(c=>`<tr><td>${c.name}</td><td><button class="btn danger" onclick="delCat('${c.id}')">Remover</button></td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">Nenhuma categoria.</div>'}
+  </div>`;
+}
+async function addRule(){
+  const name = document.getElementById('rule-name').value;
+  const minAge = document.getElementById('rule-min').value;
+  const maxAge = document.getElementById('rule-max').value;
+  try{ await api('/api/category-rules', {method:'POST', body:JSON.stringify({name,minAge,maxAge})}); render(); }catch(e){}
+}
+async function delRule(id){ try{ await api('/api/category-rules/'+id, {method:'DELETE'}); render(); }catch(e){} }
+async function delCat(id){ try{ await api('/api/categories/'+id, {method:'DELETE'}); render(); }catch(e){} }
+
+function renderGrupos(){
+  return `
+  <div class="panel">
+    <h2>Criar grupo manualmente</h2>
+    <div class="grid cols-4">
+      <div><label>Categoria</label><select id="grp-cat">${cache.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+      <div><label>Gênero</label><select id="grp-gender"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
+      <div><label>Nome</label><input id="grp-name" placeholder="Grupo A"></div>
+      <div style="display:flex; align-items:flex-end;"><button class="btn" style="width:100%;" onclick="addGroup()">Criar</button></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Dividir automaticamente em N grupos (seed em cobra)</h2>
+    <div class="grid cols-4">
+      <div><label>Categoria</label><select id="split-cat">${cache.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+      <div><label>Gênero</label><select id="split-gender"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
+      <div><label>Nº de grupos</label><input id="split-n" type="number" value="2"></div>
+      <div style="display:flex; align-items:flex-end;"><button class="btn secondary" style="width:100%;" onclick="autoSplit()">Dividir</button></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Grupos (${cache.groups.length})</h2>
+    ${cache.groups.length? `<table><thead><tr><th>Categoria</th><th>Gênero</th><th>Grupo</th><th>Atletas</th><th></th></tr></thead><tbody>
+      ${cache.groups.map(g=>{
+        const cat=catById(g.category_id);
+        const count = cache.athletes.filter(a=>a.group_id===g.id).length;
+        return `<tr><td>${cat?cat.name:'—'}</td><td>${g.gender}</td><td>${g.name}</td><td>${count}</td><td><button class="btn danger" onclick="delGroup('${g.id}')">Remover</button></td></tr>`;
+      }).join('')}
+    </tbody></table>` : '<div class="empty">Nenhum grupo.</div>'}
+  </div>`;
+}
+async function addGroup(){
+  const categoryId = document.getElementById('grp-cat').value;
+  const gender = document.getElementById('grp-gender').value;
+  const name = document.getElementById('grp-name').value;
+  try{ await api('/api/groups', {method:'POST', body:JSON.stringify({categoryId,gender,name})}); render(); }catch(e){}
+}
+async function delGroup(id){ try{ await api('/api/groups/'+id, {method:'DELETE'}); render(); }catch(e){} }
+async function autoSplit(){
+  const categoryId = document.getElementById('split-cat').value;
+  const gender = document.getElementById('split-gender').value;
+  const n = document.getElementById('split-n').value;
+  try{ const r = await api('/api/groups/auto-split', {method:'POST', body:JSON.stringify({categoryId,gender,n:Number(n)})}); toast(r.summary.join(' · ')); render(); }catch(e){}
+}
+
+function renderAtletas(){
+  return `
+  <div class="panel">
+    <h2>Novo atleta</h2>
+    <div class="grid cols-4">
+      <div><label>Nome completo</label><input id="af-name"></div>
+      <div><label>Gênero</label><select id="af-gender"><option value="M">M</option><option value="F">F</option></select></div>
+      <div><label>Categoria</label><select id="af-cat">${cache.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+      <div><label>Faixa (K)</label><select id="af-k"><option value="iniciante">Iniciante</option><option value="regular">Regular</option><option value="mestre">Mestre</option></select></div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn" onclick="addAthlete()">Adicionar</button></div>
+  </div>
+  <div class="panel">
+    <h2>Atletas (${cache.athletes.length})</h2>
+    ${cache.athletes.length? `<table><thead><tr><th>Nome</th><th>Gên.</th><th>Categoria</th><th>Rating</th><th>Grupo</th><th></th></tr></thead><tbody>
+      ${cache.athletes.map(a=>{
+        const cat=catById(a.category_id);
+        const grpOpts = groupsOf(a.category_id, a.gender).map(g=>`<option value="${g.id}" ${a.group_id===g.id?'selected':''}>${g.name}</option>`).join('');
+        return `<tr><td>${a.full_name}</td><td>${a.gender}</td><td>${cat?cat.name:'—'}</td><td>${a.rating}</td>
+          <td><select onchange="assignGroup('${a.id}', this.value)"><option value="">Sem grupo</option>${grpOpts}</select></td>
+          <td><button class="btn danger" onclick="delAthlete('${a.id}')">Remover</button></td></tr>`;
+      }).join('')}
+    </tbody></table>` : '<div class="empty">Nenhum atleta.</div>'}
+  </div>`;
+}
+async function addAthlete(){
+  const fullName = document.getElementById('af-name').value;
+  const gender = document.getElementById('af-gender').value;
+  const categoryId = document.getElementById('af-cat').value;
+  const kFlag = document.getElementById('af-k').value;
+  try{ await api('/api/athletes', {method:'POST', body:JSON.stringify({fullName,gender,categoryId,kFlag,rating:1500})}); render(); }catch(e){}
+}
+async function assignGroup(id, groupId){ try{ await api('/api/athletes/'+id, {method:'PATCH', body:JSON.stringify({groupId: groupId||null})}); render(); }catch(e){} }
+async function delAthlete(id){ try{ await api('/api/athletes/'+id, {method:'DELETE'}); render(); }catch(e){} }
+
+async function renderRodadas(){
+  if(!ui.roundsGroup && cache.groups.length) ui.roundsGroup = cache.groups[0].id;
+  const options = cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}" ${ui.roundsGroup===g.id?'selected':''}>${cat?cat.name:''} · ${g.gender} · ${g.name}</option>`;}).join('');
+  let body = '<div class="empty">Crie um grupo.</div>';
+  if(ui.roundsGroup){
+    const rounds = await api('/api/groups/'+ui.roundsGroup+'/rounds');
+    body = `<div style="margin-bottom:10px;"><button class="btn" onclick="genRound()">Gerar próxima rodada</button></div>`;
+    body += rounds.length===0 ? '<div class="empty">Nenhuma rodada ainda.</div>' :
+      rounds.slice().reverse().map(rnd=>{
+        const roundNumber = rnd[0]?.roundNumber;
+        return `<div style="margin-top:10px;"><b>Rodada ${roundNumber}</b>` + rnd.map(m=>{
+          if(m.isBye){ const a = cache.athletes.find(x=>x.id===m.byeAthleteId); return `<div class="match-row"><div>${a?a.full_name:'—'} (BYE)</div><div></div><div></div></div>`; }
+          const w = cache.athletes.find(x=>x.id===m.whiteId), b = cache.athletes.find(x=>x.id===m.blackId);
+          return `<div class="match-row">
+            <div>${w?w.full_name:'—'} (brancas)</div>
+            <div>${b?b.full_name:'—'} (pretas)</div>
+            <div class="result-btns">
+              <button class="${m.result==='1-0'?'sel':''}" onclick="recordResult('${m.id}','white')">1-0</button>
+              <button class="${m.result==='0.5-0.5'?'sel':''}" onclick="recordResult('${m.id}','draw')">½-½</button>
+              <button class="${m.result==='0-1'?'sel':''}" onclick="recordResult('${m.id}','black')">0-1</button>
+            </div></div>`;
+        }).join('') + `</div>`;
+      }).join('');
+  }
+  return `<div class="panel"><h2>Rodadas</h2><select onchange="ui.roundsGroup=this.value; render();">${options}</select><div style="margin-top:14px;">${body}</div></div>`;
+}
+async function genRound(){ try{ await api('/api/groups/'+ui.roundsGroup+'/generate-round', {method:'POST'}); render(); }catch(e){} }
+async function recordResult(mid, outcome){ try{ await api('/api/matches/'+mid+'/result', {method:'POST', body:JSON.stringify({outcome})}); render(); }catch(e){} }
+
+async function renderClassificacao(){
+  if(!ui.standGroup && cache.groups.length) ui.standGroup = cache.groups[0].id;
+  const options = cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}" ${ui.standGroup===g.id?'selected':''}>${cat?cat.name:''} · ${g.gender} · ${g.name}</option>`;}).join('');
+  let body = '<div class="empty">Crie um grupo.</div>';
+  if(ui.standGroup){
+    const data = await api('/api/groups/'+ui.standGroup+'/standings');
+    const roundHeaders = Array.from({length:data.maxRound},(_,i)=>`<th>R${i+1}</th>`).join('');
+    body = data.rows.length===0 ? '<div class="empty">Sem atletas.</div>' : `<table><thead><tr><th>#</th><th>Atleta</th>${roundHeaders}<th>Pontos</th><th>Buchholz</th><th>Rating</th></tr></thead><tbody>
+      ${data.rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.fullName}</td>${r.perRound.map(s=>`<td>${s}</td>`).join('')}<td><b>${r.points}</b></td><td>${r.buchholz}</td><td>${r.rating}</td></tr>`).join('')}
+    </tbody></table>`;
+  }
+  return `<div class="panel"><h2>Classificação</h2><select onchange="ui.standGroup=this.value; render();">${options}</select><div style="margin-top:14px;">${body}</div></div>`;
+}
+
+render();
+</script>
+</body>
+</html>
