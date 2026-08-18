@@ -28,7 +28,7 @@ const TABS = [
   {id:'historico', label:'Histórico'},
   {id:'explicacoes', label:'Explicações/Regras'},
 ];
-let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0, historyQuery:'' };
+let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0, historyQuery:'', editingFiscalId:null };
 let cache = { categories:[], groups:[], athletes:[], rules:[], users:[] };
 
 function toast(msg){
@@ -416,6 +416,7 @@ async function renderClassificacao(){
 }
 
 function renderFiscais(){
+  const editing = ui.editingFiscalId ? cache.users.find(u=>u.id===ui.editingFiscalId) : null;
   return `
   <div class="panel">
     <h2>Novo fiscal</h2>
@@ -429,11 +430,29 @@ function renderFiscais(){
     <div style="margin-top:10px;">
       <label>Grupo(s) que este fiscal vai controlar</label>
       <select id="uf-groups" multiple style="height:120px;">
-        ${cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}">${cat?cat.name:''} · ${g.gender} · ${g.name}</option>`;}).join('')}
+        ${cache.groups.map(g=>{const cat=catById(g.category_id); return `<option value="${g.id}">${g.category_name||(cat?cat.name:'')} · ${g.gender} · ${g.name}</option>`;}).join('')}
       </select>
       <p class="desc" style="margin-top:4px;">Segure Ctrl (ou Cmd no Mac) para selecionar mais de um grupo.</p>
     </div>
   </div>
+
+  ${editing ? `
+  <div class="panel" style="border:1px solid var(--border-strong, var(--gold));">
+    <h2>Editar grupos de ${editing.full_name || editing.username}</h2>
+    <p class="desc">Marque os grupos que este fiscal deve controlar agora — isso substitui a vinculação anterior dele (útil depois de remover/recriar grupos, por exemplo).</p>
+    <select id="ef-groups" multiple style="height:120px; width:100%;">
+      ${cache.groups.map(g=>{
+        const cat=catById(g.category_id);
+        const selected = editing.groupIds.includes(g.id) ? 'selected' : '';
+        return `<option value="${g.id}" ${selected}>${g.category_name||(cat?cat.name:'')} · ${g.gender} · ${g.name}</option>`;
+      }).join('')}
+    </select>
+    <div style="display:flex; gap:10px; margin-top:10px;">
+      <button class="btn" onclick="saveFiscalGroups('${editing.id}')">Salvar</button>
+      <button class="btn secondary" onclick="ui.editingFiscalId=null; render();">Cancelar</button>
+    </div>
+  </div>` : ''}
+
   <div class="panel">
     <h2>Fiscais cadastrados (${cache.users.filter(u=>u.role==='fiscal').length})</h2>
     ${cache.users.filter(u=>u.role==='fiscal').length? `<table><thead><tr><th>Nome</th><th>Usuário</th><th>Grupos</th><th></th></tr></thead><tbody>
@@ -445,10 +464,22 @@ function renderFiscais(){
           return `${g.category_name||(cat?cat.name:'')} · ${g.gender} · ${g.name}`;
         }).join('; ') || '— nenhum —';
         return `<tr><td>${u.full_name||'—'}</td><td>${u.username}</td><td>${groupNames}</td>
-          <td><button class="btn danger" onclick="delUser('${u.id}')">Remover</button></td></tr>`;
+          <td style="white-space:nowrap;">
+            <button class="btn secondary" onclick="ui.editingFiscalId='${u.id}'; render();">Editar grupos</button>
+            <button class="btn danger" onclick="delUser('${u.id}')">Remover</button>
+          </td></tr>`;
       }).join('')}
     </tbody></table>` : '<div class="empty">Nenhum fiscal cadastrado ainda.</div>'}
   </div>`;
+}
+async function saveFiscalGroups(uid){
+  const groupIds = Array.from(document.getElementById('ef-groups').selectedOptions).map(o=>o.value);
+  try{
+    await api('/api/users/'+uid, {method:'PATCH', body: JSON.stringify({groupIds})});
+    toast('Grupos do fiscal atualizados.');
+    ui.editingFiscalId = null;
+    render();
+  }catch(e){}
 }
 async function addUser(){
   const fullName = document.getElementById('uf-name').value;
