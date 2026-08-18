@@ -4,6 +4,7 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Portal do Torneio — Xadrez Escolar (versão Flask)</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -20,7 +21,7 @@ const TABS = [
   {id:'rodadas', label:'Rodadas'},
   {id:'classificacao', label:'Classificação'},
 ];
-let ui = { tab:'categorias', roundsGroup:null, standGroup:null };
+let ui = { tab:'categorias', roundsGroup:null, standGroup:null, athleteSearch:'', athletePage:0 };
 let cache = { categories:[], groups:[], athletes:[], rules:[] };
 
 function toast(msg){
@@ -139,7 +140,7 @@ async function autoSplit(){
 function renderAtletas(){
   return `
   <div class="panel">
-    <h2>Novo atleta</h2>
+    <h2>Novo atleta (cadastro individual)</h2>
     <div class="grid cols-4">
       <div><label>Nome completo</label><input id="af-name"></div>
       <div><label>Gênero</label><select id="af-gender"><option value="M">M</option><option value="F">F</option></select></div>
@@ -148,18 +149,127 @@ function renderAtletas(){
     </div>
     <div style="margin-top:10px;"><button class="btn" onclick="addAthlete()">Adicionar</button></div>
   </div>
+
   <div class="panel">
-    <h2>Atletas (${cache.athletes.length})</h2>
-    ${cache.athletes.length? `<table><thead><tr><th>Nome</th><th>Gên.</th><th>Categoria</th><th>Rating</th><th>Grupo</th><th></th></tr></thead><tbody>
-      ${cache.athletes.map(a=>{
-        const cat=catById(a.category_id);
-        const grpOpts = groupsOf(a.category_id, a.gender).map(g=>`<option value="${g.id}" ${a.group_id===g.id?'selected':''}>${g.name}</option>`).join('');
-        return `<tr><td>${a.full_name}</td><td>${a.gender}</td><td>${cat?cat.name:'—'}</td><td>${a.rating}</td>
-          <td><select onchange="assignGroup('${a.id}', this.value)"><option value="">Sem grupo</option>${grpOpts}</select></td>
-          <td><button class="btn danger" onclick="delAthlete('${a.id}')">Remover</button></td></tr>`;
-      }).join('')}
-    </tbody></table>` : '<div class="empty">Nenhum atleta.</div>'}
+    <h2>Importação em massa (Excel / CSV)</h2>
+    <p class="desc">Planilha com colunas Nome, Idade, Colégio (e opcionalmente Gênero). A categoria de cada atleta é
+    definida automaticamente pela idade, usando as faixas cadastradas na aba Categorias — cadastre-as antes de importar.
+    Se um grupo ainda não existir para a combinação categoria+gênero, ele é criado sozinho, dividindo os atletas em
+    grupos do tamanho que você definir abaixo.</p>
+    <div class="grid cols-4">
+      <div><label>Gênero padrão (se a planilha não tiver essa coluna)</label><select id="imp-gender"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
+      <div><label>Faixa padrão (K)</label><select id="imp-k"><option value="iniciante">Iniciante</option><option value="regular">Regular</option><option value="mestre">Mestre</option></select></div>
+      <div><label>Rating inicial padrão</label><input id="imp-rating" type="number" value="1500"></div>
+      <div><label>Atletas por grupo</label><input id="imp-groupsize" type="number" value="25"></div>
+    </div>
+    <div style="margin-top:10px;"><input type="file" id="imp-file" accept=".xlsx,.xls,.csv" onchange="handleImportFile(this)"></div>
+    <div id="imp-status" class="desc" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+      <h2 style="margin:0;">Atletas (${cache.athletes.length})</h2>
+      <input id="athlete-search" placeholder="Buscar por nome ou colégio…" style="max-width:260px;" oninput="ui.athleteSearch=this.value; renderAthletesTableOnly();">
+    </div>
+    <div id="athletes-table-wrap">${renderAthletesTable()}</div>
   </div>`;
+}
+function renderAthletesTable(){
+  const q = (ui.athleteSearch||'').trim().toLowerCase();
+  const filtered = cache.athletes.filter(a=>{
+    if(!q) return true;
+    return a.full_name.toLowerCase().includes(q) || (a.school||'').toLowerCase().includes(q);
+  });
+  const page = ui.athletePage||0;
+  const pageSize = 100;
+  const pageItems = filtered.slice(page*pageSize, (page+1)*pageSize);
+  const totalPages = Math.max(1, Math.ceil(filtered.length/pageSize));
+  const rows = pageItems.map(a=>{
+    const cat=catById(a.category_id);
+    const grpOpts = groupsOf(a.category_id, a.gender).map(g=>`<option value="${g.id}" ${a.group_id===g.id?'selected':''}>${g.name}</option>`).join('');
+    return `<tr><td>${a.full_name}</td><td>${a.gender}</td><td>${a.age??'—'}</td><td>${a.school||'—'}</td><td>${cat?cat.name:'—'}</td><td>${a.rating}</td>
+      <td><select onchange="assignGroup('${a.id}', this.value)"><option value="">Sem grupo</option>${grpOpts}</select></td>
+      <td><button class="btn danger" onclick="delAthlete('${a.id}')">Remover</button></td></tr>`;
+  }).join('');
+  const pager = `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:13px; color:var(--text-muted);">
+    <span>Mostrando ${pageItems.length} de ${filtered.length} (página ${page+1} de ${totalPages})</span>
+    <span><button class="btn secondary" ${page<=0?'disabled':''} onclick="changeAthletePage(-1)">← Anterior</button>
+    <button class="btn secondary" ${page>=totalPages-1?'disabled':''} onclick="changeAthletePage(1)">Próxima →</button></span>
+  </div>`;
+  return filtered.length===0 ? '<div class="empty">Nenhum atleta encontrado.</div>' :
+    `<table><thead><tr><th>Nome</th><th>Gên.</th><th>Idade</th><th>Colégio</th><th>Categoria</th><th>Rating</th><th>Grupo</th><th></th></tr></thead><tbody>${rows}</tbody></table>${pager}`;
+}
+function renderAthletesTableOnly(){
+  ui.athletePage = 0;
+  const wrap = document.getElementById('athletes-table-wrap');
+  if(wrap) wrap.innerHTML = renderAthletesTable();
+}
+function changeAthletePage(delta){
+  ui.athletePage = (ui.athletePage||0) + delta;
+  document.getElementById('athletes-table-wrap').innerHTML = renderAthletesTable();
+}
+
+function normHeader(h){ return String(h||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim(); }
+function findCol(headers, candidates){
+  const norm = headers.map(normHeader);
+  for(const cand of candidates){
+    const idx = norm.findIndex(h=> h===cand || h.includes(cand));
+    if(idx!==-1) return idx;
+  }
+  return -1;
+}
+function handleImportFile(input){
+  const statusEl = document.getElementById('imp-status');
+  const defaultGender = document.getElementById('imp-gender').value;
+  const kFlag = document.getElementById('imp-k').value;
+  const rating = Number(document.getElementById('imp-rating').value)||1500;
+  const groupSize = Number(document.getElementById('imp-groupsize').value)||25;
+  const file = input.files[0];
+  if(!file) return;
+  if(typeof XLSX==='undefined'){ statusEl.textContent='Biblioteca de planilhas não carregou. Verifique sua conexão.'; return; }
+  statusEl.textContent = 'Lendo arquivo…';
+  const reader = new FileReader();
+  reader.onload = async function(e){
+    try{
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, {type:'array'});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rowsRaw = XLSX.utils.sheet_to_json(sheet, {header:1, raw:true, defval:''});
+      if(!rowsRaw.length){ statusEl.textContent='Planilha vazia.'; return; }
+      const headers = rowsRaw[0];
+      const nameIdx = findCol(headers, ['nome completo','nome','atleta']);
+      const ageIdx = findCol(headers, ['idade','anos']);
+      const schoolIdx = findCol(headers, ['colegio','escola','instituicao']);
+      const genderIdx = findCol(headers, ['genero','sexo']);
+      if(nameIdx===-1){ statusEl.textContent='Não encontrei coluna de nome.'; return; }
+      const rows = [];
+      for(let i=1;i<rowsRaw.length;i++){
+        const r = rowsRaw[i];
+        const fullName = String(r[nameIdx]||'').trim();
+        if(!fullName) continue;
+        let gender = null;
+        if(genderIdx!==-1){
+          const raw = String(r[genderIdx]||'').trim().toUpperCase();
+          if(raw.startsWith('F')) gender='F'; else if(raw.startsWith('M')) gender='M';
+        }
+        rows.push({
+          fullName, gender,
+          age: ageIdx!==-1 && r[ageIdx]!=='' ? Number(r[ageIdx]) : null,
+          school: schoolIdx!==-1 ? String(r[schoolIdx]||'').trim() : ''
+        });
+      }
+      statusEl.textContent = `Enviando ${rows.length} atleta(s)…`;
+      const result = await api('/api/athletes/import', {method:'POST', body: JSON.stringify({
+        rows, defaultGender, kFlag, rating, groupSize
+      })});
+      statusEl.textContent = `Concluído: ${result.added} atleta(s) importado(s), ${result.groupsCreated} grupo(s) criado(s) automaticamente${result.skipped?`, ${result.skipped} duplicado(s) ignorado(s)`:''}${result.unmatched?`, ${result.unmatched} sem idade correspondente a nenhuma faixa (caíram em "Sem categoria")`:''}.`;
+      render();
+    }catch(err){
+      console.error(err);
+      statusEl.textContent = 'Não foi possível ler este arquivo. Confira o formato (.xlsx, .xls ou .csv).';
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 async function addAthlete(){
   const fullName = document.getElementById('af-name').value;
