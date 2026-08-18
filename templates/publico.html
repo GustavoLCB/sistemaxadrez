@@ -5,13 +5,58 @@
 <title>Quadro Público — Torneio de Xadrez</title>
 <link rel="stylesheet" href="/static/style.css">
 <style>
-  body{padding:30px;}
+  body{
+    padding:30px; overflow-x:hidden; position:relative;
+  }
+  /* tabuleiro translúcido de fundo, cobrindo a tela inteira */
+  body::before{
+    content:''; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image: repeating-conic-gradient(rgba(147,180,224,0.05) 0% 25%, transparent 0% 50%);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 95% 85% at 50% 35%, black 40%, transparent 88%);
+    -webkit-mask-image: radial-gradient(ellipse 95% 85% at 50% 35%, black 40%, transparent 88%);
+  }
+  /* peças de xadrez flutuando suavemente pela tela */
+  .floating-piece{
+    position:fixed; z-index:0; pointer-events:none; color:rgba(201,160,78,0.13);
+    font-size:90px; line-height:1; user-select:none;
+    animation: drift 22s ease-in-out infinite;
+  }
+  .floating-piece.ice{ color:rgba(111,168,220,0.13); }
+  .floating-piece.p1{ top:6%;  left:5%;  font-size:130px; animation-duration:27s; }
+  .floating-piece.p2{ top:60%; left:8%;  font-size:80px;  animation-duration:19s; animation-delay:-4s; }
+  .floating-piece.p3{ top:12%; left:84%; font-size:110px; animation-duration:24s; animation-delay:-9s; }
+  .floating-piece.p4{ top:68%; left:82%; font-size:75px;  animation-duration:17s; animation-delay:-2s; }
+  .floating-piece.p5{ top:38%; left:47%; font-size:58px;  animation-duration:21s; animation-delay:-12s; opacity:0.6; }
+  .floating-piece.p6{ top:82%; left:35%; font-size:55px;  animation-duration:18s; animation-delay:-6s;  opacity:0.55; }
+  .floating-piece.p7{ top:5%;  left:38%; font-size:50px;  animation-duration:23s; animation-delay:-15s; opacity:0.5; }
+  .floating-piece.p8{ top:45%; left:88%; font-size:50px;  animation-duration:16s; animation-delay:-8s;  opacity:0.5; }
+  .floating-piece.p9{ top:85%; left:60%; font-size:52px;  animation-duration:20s; animation-delay:-3s;  opacity:0.5; }
+  @keyframes drift{
+    0%   { transform: translate(0,0) rotate(0deg); }
+    25%  { transform: translate(22px,-18px) rotate(4deg); }
+    50%  { transform: translate(-14px,14px) rotate(-3deg); }
+    75%  { transform: translate(18px,10px) rotate(2deg); }
+    100% { transform: translate(0,0) rotate(0deg); }
+  }
+  .app{position:relative; z-index:2;}
+  .panel{backdrop-filter: blur(6px);}
   .kiosk-table{font-size:18px;}
   .kiosk-table th{font-size:13px;}
   h1{text-align:center;}
 </style>
 </head>
 <body>
+  <span class="floating-piece p1">♚</span>
+  <span class="floating-piece ice p2">♛</span>
+  <span class="floating-piece p3">♜</span>
+  <span class="floating-piece ice p4">♝</span>
+  <span class="floating-piece p5">♞</span>
+  <span class="floating-piece ice p6">♟</span>
+  <span class="floating-piece p7">♟</span>
+  <span class="floating-piece ice p8">♟</span>
+  <span class="floating-piece p9">♟</span>
+
 <div class="app">
   <h1>Quadro Público</h1>
   <div id="content"></div>
