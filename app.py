@@ -544,6 +544,11 @@ def import_athletes():
                 category_id = fallback["id"] if isinstance(fallback, dict) else fallback["id"]
                 unmatched += 1
 
+            # Marca a combinação categoria+gênero como "tocada" SEMPRE, mesmo quando o atleta
+            # já existia e foi pulado — assim, se ele estiver sem grupo (ex: depois de uma
+            # limpeza na Zona de Perigo), a divisão automática abaixo ainda vai alcançá-lo.
+            touched.add((category_id, gender))
+
             if cpf:
                 dup = conn.execute("SELECT COUNT(*) c FROM athletes WHERE cpf=?", (cpf,)).fetchone()["c"]
             else:
@@ -559,19 +564,26 @@ def import_athletes():
                              VALUES (?,?,?,?,?,?,?,?,?)""",
                          (aid, full_name, gender, category_id, k_flag, default_rating, age, school, cpf or None))
             added += 1
-            touched.add((category_id, gender))
 
         groups_created = 0
         for category_id, gender in touched:
-            existing = conn.execute(
-                "SELECT COUNT(*) c FROM groups_t WHERE category_id=? AND gender=?", (category_id, gender)
-            ).fetchone()["c"]
-            if existing:
-                continue
+            # Só considera "já tem grupo" se existir grupo E algum atleta desse grupo com
+            # essa categoria/gênero — grupos vazios (ex: depois de "remover todos os grupos"
+            # seguido de reimportação) não devem bloquear a divisão automática.
             pool = conn.execute(
                 "SELECT * FROM athletes WHERE category_id=? AND gender=? AND group_id IS NULL",
                 (category_id, gender)
             ).fetchall()
+            if not pool:
+                continue
+            existing_with_members = conn.execute(
+                """SELECT COUNT(*) c FROM groups_t g
+                   WHERE g.category_id=? AND g.gender=?
+                   AND EXISTS (SELECT 1 FROM athletes a WHERE a.group_id=g.id)""",
+                (category_id, gender)
+            ).fetchone()["c"]
+            if existing_with_members:
+                continue
             pool = sorted(pool, key=lambda a: -a["rating"])
             n = max(1, -(-len(pool) // group_size))  # ceil
             buckets = [[] for _ in range(n)]
